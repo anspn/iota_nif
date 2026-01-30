@@ -1,0 +1,7 @@
+/target
+/_build
+/priv/*.so
+/priv/*.dylib
+/priv/*.dll
+*.beam
+erl_crash.dump

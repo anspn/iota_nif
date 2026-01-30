@@ -1,0 +1,26 @@
+{application, iota_did_nif,
+ [{description, "IOTA DID generation NIF for Erlang/OTP"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env, []},
+  {modules, [iota_did_nif]},
+
+  %% Hex.pm metadata
+  {licenses, ["MIT"]},
+  {links, [
+    {"GitHub", "https://github.com/anspn/iota_nif"}
+  ]},
+  {files, [
+    "src",
+    "priv",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rebar.config",
+    "README.md",
+    "LICENSE"
+  ]}
+ ]}.
