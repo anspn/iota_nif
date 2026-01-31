@@ -1832,10 +1832,12 @@ dependencies = [
 name = "iota_nif"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "identity_iota",
  "rustler",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

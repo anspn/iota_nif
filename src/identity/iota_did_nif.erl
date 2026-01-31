@@ -1,8 +1,8 @@
 %%%-------------------------------------------------------------------
 %%% @doc IOTA DID NIF Module
 %%%
-%%% This module provides Native Implemented Functions (NIFs) for
-%%% generating and manipulating IOTA Decentralized Identifiers (DIDs).
+%%% This module provides functions for generating and manipulating
+%%% IOTA Decentralized Identifiers (DIDs).
 %%%
 %%% All string parameters must be passed as binaries.
 %%% @end
@@ -17,30 +17,6 @@
     create_did_url/2,
     is_valid_iota_did/1
 ]).
-
-%% NIF loading
--on_load(init/0).
-
--define(APPNAME, iota_did_nif).
--define(LIBNAME, libiota_nif).
-
-%%%===================================================================
-%%% NIF Loading
-%%%===================================================================
-
-%% @private
-%% @doc Load the NIF library.
-init() ->
-    PrivDir = case code:priv_dir(?APPNAME) of
-        {error, bad_name} ->
-            %% Application not started yet, find priv relative to beam file
-            EbinDir = filename:dirname(code:which(?MODULE)),
-            filename:join(filename:dirname(EbinDir), "priv");
-        Dir ->
-            Dir
-    end,
-    SoName = filename:join(PrivDir, atom_to_list(?LIBNAME)),
-    erlang:load_nif(SoName, 0).
 
 %%%===================================================================
 %%% API Functions
@@ -77,8 +53,8 @@ generate_did() ->
 %%          </ul>
 %%          `{error, Reason}' on failure.
 -spec generate_did(Network :: binary()) -> {ok, binary()} | {error, binary()}.
-generate_did(_Network) ->
-    erlang:nif_error(nif_not_loaded).
+generate_did(Network) ->
+    iota_nif:generate_did(Network).
 
 %% @doc Extract the DID string from a DID document JSON.
 %%
@@ -88,24 +64,26 @@ generate_did(_Network) ->
 %% @returns `{ok, Did}' where Did is the extracted DID string,
 %%          or `{error, Reason}' if parsing fails or no `id' field exists.
 -spec extract_did_from_document(DocumentJson :: binary()) -> {ok, binary()} | {error, binary()}.
-extract_did_from_document(_DocumentJson) ->
-    erlang:nif_error(nif_not_loaded).
+extract_did_from_document(DocumentJson) ->
+    iota_nif:extract_did_from_document(DocumentJson).
 
 %% @doc Create a DID URL by combining a DID with a fragment.
 %%
 %% @param Did The base DID string as a binary.
 %% @param Fragment The fragment identifier as a binary (without the `#').
-%% @returns A binary containing the complete DID URL.
+%% @returns `{ok, Url}' where Url is the complete DID URL binary,
+%%          or `{error, Reason}' if inputs are invalid.
 %%
 %% Example:
 %% ```
-%% <<"did:iota:rms:0x123#key-1">> = iota_did_nif:create_did_url(
+%% {ok, <<"did:iota:rms:0x123#key-1">>} = iota_did_nif:create_did_url(
 %%     <<"did:iota:rms:0x123">>,
 %%     <<"key-1">>).
 %% '''
--spec create_did_url(Did :: binary(), Fragment :: binary()) -> binary().
-create_did_url(_Did, _Fragment) ->
-    erlang:nif_error(nif_not_loaded).
+-spec create_did_url(Did :: binary(), Fragment :: binary()) -> 
+    {ok, binary()} | {error, binary()}.
+create_did_url(Did, Fragment) ->
+    iota_nif:create_did_url(Did, Fragment).
 
 %% @doc Check if a string is a valid IOTA DID format.
 %%
@@ -119,9 +97,5 @@ create_did_url(_Did, _Fragment) ->
 %% @param Did The DID string to validate as a binary.
 %% @returns `true' if valid, `false' otherwise.
 -spec is_valid_iota_did(Did :: binary()) -> boolean().
-is_valid_iota_did(_Did) ->
-    erlang:nif_error(nif_not_loaded).
-
-%%%===================================================================
-%%% Internal Functions
-%%%===================================================================
+is_valid_iota_did(Did) ->
+    iota_nif:is_valid_iota_did(Did).
