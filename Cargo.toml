@@ -5,7 +5,6 @@ edition = "2021"
 
 [lib]
 name = "iota_nif"
-#path = "lib_did.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
