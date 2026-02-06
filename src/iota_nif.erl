@@ -61,7 +61,7 @@ extract_did_from_document(_DocumentJson) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @private
--spec create_did_url(binary(), binary()) -> binary().
+-spec create_did_url(binary(), binary()) -> {ok, binary()} | {error, binary()}.
 create_did_url(_Did, _Fragment) ->
     erlang:nif_error(nif_not_loaded).
 
