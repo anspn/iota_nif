@@ -88,7 +88,7 @@ pub fn generate_did(network_name: Binary) -> NifResult<(rustler::Atom, String)> 
 
 /// Async DID generation implementation
 async fn generate_did_async(network_name: &str) -> Result<DidResult, String> {
-    use identity_iota::iota::NetworkName;
+    use product_common::network_name::NetworkName;
     
     // Use cached static network names to avoid memory leaks
     // Only known valid network names are supported

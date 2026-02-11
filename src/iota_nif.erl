@@ -18,6 +18,9 @@
     extract_did_from_document/1,
     create_did_url/2,
     is_valid_iota_did/1,
+    %% Ledger NIFs (IOTA Rebased / MoveVM)
+    create_and_publish_did/4,
+    resolve_did/3,
     %% Notarization NIFs
     create_notarization_payload/2,
     verify_notarization_payload/1,
@@ -68,6 +71,24 @@ create_did_url(_Did, _Fragment) ->
 %% @private
 -spec is_valid_iota_did(binary()) -> boolean().
 is_valid_iota_did(_Did) ->
+    erlang:nif_error(nif_not_loaded).
+
+%%%===================================================================
+%%% Ledger NIFs (IOTA Rebased / MoveVM)
+%%%===================================================================
+
+%% @private
+%% @doc Create and publish a DID using an Ed25519 secret key.
+%% GasCoinId can be an empty binary for automatic gas coin selection.
+%% IdentityPkgId can be an empty binary for auto-discovery on known networks.
+-spec create_and_publish_did(binary(), binary(), binary(), binary()) -> {ok, binary()} | {error, binary()}.
+create_and_publish_did(_NodeUrl, _SecretKey, _GasCoinId, _IdentityPkgId) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% IdentityPkgId can be an empty binary for auto-discovery on known networks.
+-spec resolve_did(binary(), binary(), binary()) -> {ok, binary()} | {error, binary()}.
+resolve_did(_NodeUrl, _Did, _IdentityPkgId) ->
     erlang:nif_error(nif_not_loaded).
 
 %%%===================================================================

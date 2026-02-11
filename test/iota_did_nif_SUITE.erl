@@ -38,7 +38,13 @@
     %% Mock mainnet operations
     publish_and_resolve_did/1,
     resolve_nonexistent_did/1,
-    full_did_lifecycle/1
+    full_did_lifecycle/1,
+    %% Ledger operations (network required, skipped if unavailable)
+    ledger_resolve_invalid_did/1,
+    ledger_publish_invalid_node/1,
+    %% Integration tests (require local IOTA node + IOTA_IDENTITY_PKG_ID)
+    ledger_publish_did_on_local_node/1,
+    ledger_publish_and_resolve_on_local_node/1
 ]).
 
 %%%===================================================================
@@ -48,7 +54,9 @@
 all() ->
     [
         {group, local_operations},
-        {group, mock_mainnet_operations}
+        {group, mock_mainnet_operations},
+        {group, ledger_error_handling},
+        {group, ledger_integration}
     ].
 
 groups() ->
@@ -70,6 +78,14 @@ groups() ->
             publish_and_resolve_did,
             resolve_nonexistent_did,
             full_did_lifecycle
+        ]},
+        {ledger_error_handling, [sequence], [
+            ledger_resolve_invalid_did,
+            ledger_publish_invalid_node
+        ]},
+        {ledger_integration, [sequence], [
+            ledger_publish_did_on_local_node,
+            ledger_publish_and_resolve_on_local_node
         ]}
     ].
 
@@ -82,6 +98,30 @@ end_per_suite(_Config) ->
 init_per_group(mock_mainnet_operations, Config) ->
     {ok, _Pid} = iota_client_mock:start_link(),
     Config;
+init_per_group(ledger_integration, Config) ->
+    %% Skip if required env vars are not set (no local node available)
+    case {os:getenv("IOTA_TEST_SECRET_KEY"), os:getenv("IOTA_IDENTITY_PKG_ID")} of
+        {false, _} ->
+            {skip, "IOTA_TEST_SECRET_KEY not set — skipping integration tests"};
+        {_, false} ->
+            {skip, "IOTA_IDENTITY_PKG_ID not set — skipping integration tests"};
+        {KeyStr, PkgIdStr} ->
+            SecretKey = list_to_binary(KeyStr),
+            IdentityPkgId = list_to_binary(PkgIdStr),
+            GasCoinId = case os:getenv("IOTA_TEST_GAS_COIN_ID") of
+                false -> <<>>;
+                G -> list_to_binary(G)
+            end,
+            NodeUrl = case os:getenv("IOTA_TEST_NODE_URL") of
+                false -> <<"http://127.0.0.1:9000">>;
+                U -> list_to_binary(U)
+            end,
+            [{secret_key, SecretKey},
+             {identity_pkg_id, IdentityPkgId},
+             {gas_coin_id, GasCoinId},
+             {node_url, NodeUrl}
+             | Config]
+    end;
 init_per_group(_Group, Config) ->
     Config.
 
@@ -243,6 +283,121 @@ full_did_lifecycle(_Config) ->
     ?assertEqual(FinalDid, maps:get(<<"id">>, ResolvedDoc)),
     ?assert(maps:is_key(<<"block_id">>, ResolvedDoc)),
     ?assert(maps:is_key(<<"published_at">>, ResolvedDoc)).
+
+%%%===================================================================
+%%% Configuration Tests
+%%%===================================================================
+
+%%%===================================================================
+%%% Ledger Error Handling Tests
+%%%===================================================================
+
+ledger_resolve_invalid_did(_Config) ->
+    %% Attempting to resolve with an unreachable node should return error
+    Result = iota_did_nif:resolve_did(
+        <<"did:iota:rms:0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef">>,
+        <<"http://127.0.0.1:1">>
+    ),
+    ct:pal("resolve_did with bad node: ~p", [Result]),
+    ?assertMatch({error, _}, Result).
+
+ledger_publish_invalid_node(_Config) ->
+    %% Attempting to publish with an unreachable node should return error
+    %% Use a dummy base64 key (32 zero bytes)
+    DummyKey = base64:encode(<<0:256>>),
+    Result = iota_did_nif:create_and_publish_did(
+        DummyKey,
+        <<"http://127.0.0.1:1">>,
+        <<>>
+    ),
+    ct:pal("create_and_publish_did with bad node: ~p", [Result]),
+    ?assertMatch({error, _}, Result).
+
+%%%===================================================================
+%%% Ledger Integration Tests (require local IOTA node)
+%%%===================================================================
+
+ledger_publish_did_on_local_node(Config) ->
+    SecretKey = ?config(secret_key, Config),
+    NodeUrl = ?config(node_url, Config),
+    GasCoinId = ?config(gas_coin_id, Config),
+    IdentityPkgId = ?config(identity_pkg_id, Config),
+
+    ct:pal("Publishing DID to local node at ~s", [NodeUrl]),
+    ct:pal("Using gas coin: ~s", [GasCoinId]),
+
+    %% Publish a new DID to the local IOTA Rebased node
+    Result = iota_did_nif:create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId, GasCoinId),
+    ct:pal("Publish result: ~p", [Result]),
+
+    ?assertMatch({ok, _}, Result),
+    {ok, ResultJson} = Result,
+    Parsed = decode_json(ResultJson),
+
+    %% Verify the result contains all expected fields
+    ?assert(maps:is_key(<<"did">>, Parsed)),
+    ?assert(maps:is_key(<<"document">>, Parsed)),
+    ?assert(maps:is_key(<<"verification_method_fragment">>, Parsed)),
+    ?assert(maps:is_key(<<"network">>, Parsed)),
+    ?assert(maps:is_key(<<"sender_address">>, Parsed)),
+
+    Did = maps:get(<<"did">>, Parsed),
+    Fragment = maps:get(<<"verification_method_fragment">>, Parsed),
+    Network = maps:get(<<"network">>, Parsed),
+    SenderAddr = maps:get(<<"sender_address">>, Parsed),
+
+    ct:pal("Published DID: ~s", [Did]),
+    ct:pal("Network: ~s", [Network]),
+    ct:pal("Fragment: ~s", [Fragment]),
+    ct:pal("Sender: ~s", [SenderAddr]),
+
+    %% The DID should be a valid IOTA DID
+    ?assert(iota_did_nif:is_valid_iota_did(Did)),
+
+    %% The DID should NOT have an all-zeros tag (it's published on-chain)
+    ?assertNotEqual(
+        nomatch,
+        binary:match(Did, <<"did:iota:">>)
+    ),
+
+    %% Create a DID URL with the verification method fragment
+    {ok, DidUrl} = iota_did_nif:create_did_url(Did, Fragment),
+    ct:pal("DID URL: ~s", [DidUrl]),
+    ?assert(binary:match(DidUrl, <<"#">>) =/= nomatch),
+
+    Config.
+
+ledger_publish_and_resolve_on_local_node(Config) ->
+    SecretKey = ?config(secret_key, Config),
+    NodeUrl = ?config(node_url, Config),
+    IdentityPkgId = ?config(identity_pkg_id, Config),
+
+    ct:pal("Publishing DID for resolve test on ~s", [NodeUrl]),
+
+    %% Publish a new DID (auto gas coin selection)
+    {ok, PublishJson} = iota_did_nif:create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId),
+    PublishResult = decode_json(PublishJson),
+    Did = maps:get(<<"did">>, PublishResult),
+
+    ct:pal("Published DID: ~s — now resolving...", [Did]),
+
+    %% Resolve the DID we just published
+    {ok, ResolveJson} = iota_did_nif:resolve_did(Did, NodeUrl, IdentityPkgId),
+    ResolveResult = decode_json(ResolveJson),
+
+    ct:pal("Resolved result: ~p", [ResolveResult]),
+
+    %% Verify the resolved DID matches what we published
+    ResolvedDid = maps:get(<<"did">>, ResolveResult),
+    ?assertEqual(Did, ResolvedDid),
+
+    %% The resolved document should be valid JSON
+    ?assert(maps:is_key(<<"document">>, ResolveResult)),
+    ResolvedDoc = maps:get(<<"document">>, ResolveResult),
+    ?assert(is_binary(ResolvedDoc) orelse is_map(ResolvedDoc)),
+
+    ct:pal("Successfully published and resolved DID: ~s", [Did]),
+    Config.
 
 %%%===================================================================
 %%% Helpers

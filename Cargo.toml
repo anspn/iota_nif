@@ -1,6 +1,6 @@
 [package]
 name = "iota_nif"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
@@ -11,11 +11,18 @@ crate-type = ["cdylib"]
 # Erlang NIF bindings
 rustler = "0.34"
 
-# IOTA Identity SDK for DID operations
-identity_iota = { version = "1.5", features = ["memstore"] }
+# IOTA Identity SDK for DID operations (Rebased/MoveVM compatible)
+# v1.8.0-beta.2 — compatible with IOTA Rebased networks
+identity_iota = { git = "https://github.com/iotaledger/identity.git", tag = "v1.8.0-beta.2", features = ["iota-client", "send-sync", "memstore"] }
 
-# Async runtime (IOTA SDK requires async)
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Shared IOTA product types (NetworkName, etc.)
+product_common = { git = "https://github.com/iotaledger/product-core.git", tag = "v0.8.8" }
+
+# IOTA SDK for network client operations (Rebased/MoveVM)
+iota-sdk = { git = "https://github.com/iotaledger/iota.git", package = "iota-sdk", tag = "v1.13.1" }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -24,3 +31,12 @@ serde_json = "1.0"
 # Hashing and encoding (for notarization)
 sha2 = "0.10"
 hex = "0.4"
+
+# Ed25519 key derivation (public key from private key)
+ed25519-dalek = "2.1"
+
+# Base64 encoding/decoding for key import
+base64 = "0.22"
+
+# Bech32m decoding for IOTA CLI key format (iotaprivkey1...)
+bech32 = "0.11"

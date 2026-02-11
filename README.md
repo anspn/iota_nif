@@ -1,20 +1,59 @@
 # IOTA DID NIF for Erlang
 
-A Rust NIF (Native Implemented Function) library that provides IOTA DID (Decentralized Identifier) generation for Erlang/Elixir projects. Designed for publishing DIDs on the **IOTA mainnet**.
+A Rust NIF (Native Implemented Function) library that provides IOTA DID (Decentralized Identifier) operations for Erlang/Elixir projects. Supports the **IOTA Rebased** network (MoveVM-based).
 
 ## Features
 
-- Generate new IOTA DID documents with Ed25519 verification methods
-- Extract DID from document JSON
-- Create DID URLs with fragments
-- Validate IOTA DID format
-- Ready to use as a rebar3 dependency
+- **Local DID operations**: Generate DID documents, extract DIDs, create DID URLs, validate DIDs
+- **Ledger publishing**: Publish DID documents on-chain via IOTA Rebased MoveVM transactions
+- **DID resolution**: Resolve published DIDs from the IOTA ledger
+- **Notarization**: Hash and notarize data payloads
+- **Key format support**: Accepts Ed25519 keys in Bech32 (`iotaprivkey1...`), Base64 (33-byte keystore), or raw Base64 (32-byte) formats
+- **Library-first design**: All sensitive parameters (keys, node URLs, package IDs) are passed explicitly by the consuming application — no hidden environment variable or application config reads
 
 ## Prerequisites
 
 - Rust (1.70+)
-- Erlang/OTP (24+)
+- Erlang/OTP 27+
 - rebar3
+- An IOTA Rebased node (local or testnet) for ledger operations
+
+## Quick Start
+
+### 1. Build
+
+```bash
+git clone https://github.com/anspn/iota_nif.git
+cd iota_nif
+rebar3 compile
+```
+
+### 2. Set up IOTA CLI (for ledger operations)
+
+```bash
+# Request gas coins from the faucet (local node or testnet)
+iota client faucet
+
+# Check your address and gas coins
+iota client active-address
+iota client gas
+
+# Export your Ed25519 private key
+iota keytool export <your-address>
+
+# Find the identity package ID for your network
+# (check your network's documentation or deploy the iota_identity Move package)
+```
+
+### 3. Publish a DID
+
+```erlang
+SecretKey = <<"iotaprivkey1qz...">>,       %% from `iota keytool export`
+NodeUrl = <<"http://127.0.0.1:9000">>,     %% your IOTA node
+IdentityPkgId = <<"0xabc123...">>,         %% identity package ObjectID
+
+{ok, ResultJson} = iota_did_nif:create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId).
+```
 
 ## Installation as rebar3 Dependency
 
@@ -22,7 +61,7 @@ Add to your `rebar.config`:
 
 ```erlang
 {deps, [
-    {iota_did_nif, {git, "https://github.com/anspn/iota_nif.git", {branch, "main"}}}
+    {iota_nif, {git, "https://github.com/anspn/iota_nif.git", {branch, "main"}}}
 ]}.
 ```
 
@@ -34,130 +73,181 @@ rebar3 compile
 
 The Rust NIF will be automatically compiled during the build process.
 
-## Manual Build
+## Usage
 
-```bash
-# Clone and build
-git clone https://github.com/anspn/iota_nif.git
-cd iota_nif
-rebar3 compile
+### Key Formats
 
-# Or use the build script
-chmod +x build.sh
-./build.sh
-```
+All ledger operations require an Ed25519 private key. Three formats are accepted:
 
-## Usage in Erlang
+| Format | Example | Source |
+|--------|---------|--------|
+| **Bech32** | `iotaprivkey1qz...` | `iota keytool export --key-identity <addr>` |
+| **Base64 (33 bytes)** | `AJ8uNnI...` | IOTA keystore file (0x00 prefix + key) |
+| **Base64 (32 bytes)** | `ny43cj...` | Raw Ed25519 private key |
 
-**Note:** All string parameters must be passed as binaries (`<<"...">>`)
+### Local DID Operations (no network required)
 
 ```erlang
-%% Generate a new DID for IOTA mainnet (default)
+%% Generate a new DID (IOTA mainnet, offline)
 {ok, ResultJson} = iota_did_nif:generate_did().
 
-%% Or specify network explicitly
-{ok, ResultJson} = iota_did_nif:generate_did(<<"iota">>).
+%% Generate for a specific network
+{ok, ResultJson} = iota_did_nif:generate_did(<<"iota">>).   %% mainnet
+{ok, ResultJson} = iota_did_nif:generate_did(<<"atoi">>).   %% testnet
 
-%% The result is a JSON binary containing:
-%% - did: The DID string (placeholder until published to network)
-%% - document: The full DID document as JSON
-%% - verification_method_fragment: The fragment ID of the generated key
-
-%% Parse the JSON result (requires jsx or jiffy library)
-%% Result = jsx:decode(ResultJson, [return_maps]).
+%% NOTE: Locally generated DIDs have placeholder tags (all zeros).
+%% Use create_and_publish_did to get a real on-chain DID.
 
 %% Extract DID from a document
-{ok, Did} = iota_did_nif:extract_did_from_document(<<"{\"id\": \"did:iota:0x123\"}">>).
+{ok, Did} = iota_did_nif:extract_did_from_document(DocumentJson).
 
-%% Create a DID URL
-DidUrl = iota_did_nif:create_did_url(<<"did:iota:0x123">>, <<"key-1">>).
-%% Returns: <<"did:iota:0x123#key-1">>
+%% Create a DID URL with fragment
+{ok, Url} = iota_did_nif:create_did_url(<<"did:iota:0x123">>, <<"key-1">>).
+%% => <<"did:iota:0x123#key-1">>
 
-%% Validate a DID
+%% Validate DID format
 true = iota_did_nif:is_valid_iota_did(<<"did:iota:0x123456">>).
-false = iota_did_nif:is_valid_iota_did(<<"invalid">>).
 ```
 
-## Usage in Elixir
+### Ledger Operations (IOTA Rebased)
+
+All ledger functions require explicit parameters — the library never reads from
+environment variables or application config.
+
+```erlang
+SecretKey = <<"iotaprivkey1qz...">>,
+NodeUrl = <<"http://127.0.0.1:9000">>,
+IdentityPkgId = <<"0xabc123...">>,          %% identity package ObjectID
+
+%% Publish a new DID (auto gas coin selection)
+{ok, ResultJson} = iota_did_nif:create_and_publish_did(
+    SecretKey, NodeUrl, IdentityPkgId
+).
+
+%% Publish with explicit gas coin selection
+GasCoinId = <<"0xdef456...">>,
+{ok, ResultJson} = iota_did_nif:create_and_publish_did(
+    SecretKey, NodeUrl, IdentityPkgId, GasCoinId
+).
+
+%% Parse the publish result (using jsx or json module)
+Result = json:decode(ResultJson).
+%% Result contains:
+%%   did              - The published DID string (real on-chain tag)
+%%   document         - The full DID document as JSON
+%%   verification_method_fragment - Fragment ID of the generated key
+%%   network          - Network name
+%%   sender_address   - Address that published the DID
+
+%% Resolve a published DID
+{ok, ResolveJson} = iota_did_nif:resolve_did(
+    <<"did:iota:0xabc...">>, NodeUrl
+).
+
+%% Resolve with explicit identity package ID
+{ok, ResolveJson} = iota_did_nif:resolve_did(
+    <<"did:iota:0xabc...">>, NodeUrl, IdentityPkgId
+).
+```
+
+### Elixir Usage
 
 ```elixir
 # Add to your mix.exs dependencies
-{:iota_did_nif, git: "https://github.com/anspn/iota_nif.git"}
+{:iota_nif, git: "https://github.com/anspn/iota_nif.git"}
 
-# Generate a DID for IOTA mainnet
+# Generate a DID locally (no network)
 {:ok, result_json} = :iota_did_nif.generate_did()
 result = Jason.decode!(result_json)
 
-# Access the DID components
-did = result["did"]
-document = result["document"]
-fragment = result["verification_method_fragment"]
+# Publish a DID on-chain
+secret_key = "iotaprivkey1qz..."
+node_url = "http://127.0.0.1:9000"
+pkg_id = "0xabc123..."
+{:ok, result_json} = :iota_did_nif.create_and_publish_did(secret_key, node_url, pkg_id)
+result = Jason.decode!(result_json)
 ```
 
-## Network Names
+## API Reference
 
-| Network | Name | Description |
-|---------|------|-------------|
-| IOTA Mainnet | `<<"iota">>` | **Default** - Production network |
-| IOTA Testnet | `<<"atoi">>` | IOTA test network |
-| Shimmer | `<<"smr">>` | Shimmer mainnet |
-| Shimmer Testnet | `<<"rms">>` | Shimmer test network |
+### DID Operations (local, no network)
 
-## Understanding the DID Document
+| Function | Description |
+|----------|-------------|
+| `generate_did()` | Generate DID with default network |
+| `generate_did(Network)` | Generate DID for specific network |
+| `extract_did_from_document(DocJson)` | Extract DID from JSON document |
+| `create_did_url(Did, Fragment)` | Create DID URL with fragment |
+| `is_valid_iota_did(Did)` | Validate DID format |
 
-The generated DID document follows the W3C DID specification. Example output for IOTA mainnet:
+### Ledger Operations (require IOTA node)
 
-```json
-{
-  "did": "did:iota:0x000...",
-  "document": {
-    "doc": {
-      "id": "did:iota:0x000...",
-      "verificationMethod": [{
-        "id": "did:iota:0x000...#fragmentId",
-        "controller": "did:iota:0x000...",
-        "type": "JsonWebKey2020",
-        "publicKeyJwk": {
-          "kty": "OKP",
-          "alg": "EdDSA",
-          "crv": "Ed25519",
-          "x": "base64-encoded-public-key"
-        }
-      }]
-    },
-    "meta": {
-      "created": "2026-01-30T15:00:00Z",
-      "updated": "2026-01-30T15:00:00Z"
-    }
-  },
-  "verification_method_fragment": "fragmentId"
-}
-```
-
-**Note:** The DID contains placeholder zeros (`0x000...`) until published to the IOTA network. Publishing requires an IOTA client connection and funds for the transaction.
+| Function | Description |
+|----------|-------------|
+| `create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId)` | Publish DID (auto gas coin) |
+| `create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId, GasCoinId)` | Publish DID with specific gas coin |
+| `resolve_did(Did, NodeUrl)` | Resolve a published DID |
+| `resolve_did(Did, NodeUrl, IdentityPkgId)` | Resolve with explicit package ID |
 
 ## Project Structure
 
 ```
 iota_nif/
-├── rebar.config          # rebar3 configuration with Rust build hooks
-├── Cargo.toml            # Rust dependencies
+├── rebar.config              # rebar3 configuration with Rust build hooks
+├── Cargo.toml                # Rust dependencies
+├── include/
+│   └── iota_nif.hrl          # Shared macros
 ├── src/
-│   ├── iota_did_nif.app.src   # OTP application spec
-│   ├── iota_did_nif.erl       # Erlang NIF module
-│   └── lib.rs                  # Rust NIF implementation
-├── priv/
-│   └── libiota_nif.so         # Compiled NIF (after build)
-└── _build/                     # rebar3 build output
+│   ├── iota_nif.app.src      # OTP application spec
+│   ├── iota_nif.erl          # NIF loader (private)
+│   ├── lib.rs                # Rust NIF entry point
+│   ├── lib_did.rs            # Local DID operations (Rust)
+│   ├── lib_ledger.rs         # Ledger publish/resolve (Rust)
+│   ├── lib_notarization.rs   # Notarization (Rust)
+│   └── identity/
+│       └── iota_did_nif.erl  # Public Erlang API for DID operations
+├── test/
+│   ├── iota_did_nif_SUITE.erl
+│   ├── iota_notarization_nif_SUITE.erl
+│   └── nif_resilience_SUITE.erl
+└── priv/
+    └── libiota_nif.so         # Compiled NIF (after build)
 ```
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Erlang/Elixir  │────▶│   Rust NIF       │────▶│  IOTA Identity  │
-│     Process     │     │   (rustler)      │     │     SDK 1.5     │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  Erlang/Elixir  │────▶│   Rust NIF       │────▶│  IOTA Identity   │
+│     Process     │     │   (rustler)      │     │  SDK v1.8.0-β2   │
+└─────────────────┘     └──────────────────┘     └──────────────────┘
+                                                         │
+                                                         ▼
+                                                  ┌──────────────────┐
+                                                  │  IOTA Rebased    │
+                                                  │  Node (MoveVM)   │
+                                                  └──────────────────┘
+```
+
+## Running Tests
+
+```bash
+# Run all tests (local operations, mock, error handling)
+rebar3 ct
+
+# Run only specific suite
+rebar3 ct --suite=iota_did_nif_SUITE
+
+# Run integration tests against a local IOTA node
+# Required environment variables:
+#   IOTA_TEST_SECRET_KEY   - Ed25519 private key (Bech32 or Base64)
+#   IOTA_IDENTITY_PKG_ID   - ObjectID of the iota_identity Move package
+# Optional:
+#   IOTA_TEST_GAS_COIN_ID  - Specific gas coin ObjectID (auto-selected if omitted)
+#   IOTA_TEST_NODE_URL     - Node URL (defaults to http://127.0.0.1:9000)
+IOTA_TEST_SECRET_KEY="iotaprivkey1qz..." \
+IOTA_IDENTITY_PKG_ID="0x..." \
+rebar3 ct --suite=iota_did_nif_SUITE --group=ledger_integration
 ```
 
 ## License

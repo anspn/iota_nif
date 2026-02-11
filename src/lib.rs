@@ -1,4 +1,5 @@
 pub mod lib_did;
+pub mod lib_ledger;
 pub mod lib_notarization;
 
 // Register NIF library

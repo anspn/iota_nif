@@ -62,7 +62,13 @@
     %% Boundary conditions
     max_network_name_length/1,
     single_byte_inputs/1,
-    repeated_calls_same_input/1
+    repeated_calls_same_input/1,
+    
+    %% Ledger NIF resilience
+    ledger_empty_node_url/1,
+    ledger_empty_did_resolve/1,
+    ledger_non_utf8_inputs/1,
+    ledger_wrong_types/1
 ]).
 
 %%%===================================================================
@@ -76,7 +82,8 @@ all() ->
         {group, malformed_inputs},
         {group, type_confusion},
         {group, concurrent_stress},
-        {group, boundary_conditions}
+        {group, boundary_conditions},
+        {group, ledger_nif_resilience}
     ].
 
 groups() ->
@@ -119,6 +126,12 @@ groups() ->
             max_network_name_length,
             single_byte_inputs,
             repeated_calls_same_input
+        ]},
+        {ledger_nif_resilience, [parallel], [
+            ledger_empty_node_url,
+            ledger_empty_did_resolve,
+            ledger_non_utf8_inputs,
+            ledger_wrong_types
         ]}
     ].
 
@@ -497,6 +510,51 @@ repeated_calls_same_input(_Config) ->
     ct:pal("~p calls with same input produced ~p unique results", 
            [NumCalls, length(UniqueHashes)]),
     ?assertEqual(1, length(UniqueHashes)).
+
+%%%===================================================================
+%%% Ledger NIF Resilience Tests
+%%%===================================================================
+
+ledger_empty_node_url(_Config) ->
+    %% Empty node URL and key should return error, not crash
+    DummyKey = base64:encode(<<0:256>>),
+    Result1 = iota_did_nif:create_and_publish_did(DummyKey, <<>>, <<>>),
+    ct:pal("create_and_publish_did(key, <<>>, <<>>) = ~p", [Result1]),
+    ?assertMatch({error, _}, Result1),
+    
+    Result2 = iota_did_nif:resolve_did(<<"did:iota:0x1234">>, <<>>),
+    ct:pal("resolve_did(did, <<>>) = ~p", [Result2]),
+    ?assertMatch({error, _}, Result2).
+
+ledger_empty_did_resolve(_Config) ->
+    %% Empty DID string should return error, not crash
+    Result = iota_did_nif:resolve_did(<<>>, <<"http://localhost">>),
+    ct:pal("resolve_did(<<>>, localhost) = ~p", [Result]),
+    ?assertMatch({error, _}, Result).
+
+ledger_non_utf8_inputs(_Config) ->
+    InvalidUtf8 = <<128, 129, 130, 255>>,
+    DummyKey = base64:encode(<<0:256>>),
+    
+    %% Non-UTF8 node URL
+    R1 = iota_did_nif:create_and_publish_did(DummyKey, InvalidUtf8, <<>>),
+    ct:pal("create_and_publish_did(key, non-utf8, <<>>) = ~p", [R1]),
+    ?assertMatch({error, _}, R1),
+    
+    %% Non-UTF8 key
+    R2 = iota_did_nif:create_and_publish_did(InvalidUtf8, <<"http://localhost">>, <<>>),
+    ct:pal("create_and_publish_did(non-utf8 key, ...) = ~p", [R2]),
+    ?assertMatch({error, _}, R2),
+    
+    %% Non-UTF8 DID
+    R3 = iota_did_nif:resolve_did(InvalidUtf8, <<"http://localhost">>),
+    ct:pal("resolve_did(non-utf8, localhost) = ~p", [R3]),
+    ?assertMatch({error, _}, R3).
+
+ledger_wrong_types(_Config) ->
+    %% Pass wrong types to ledger NIFs - should raise badarg
+    ?assertError(badarg, iota_did_nif:create_and_publish_did(atom, atom, atom)),
+    ?assertError(badarg, iota_did_nif:resolve_did(123, 456)).
 
 %%%===================================================================
 %%% Helpers
