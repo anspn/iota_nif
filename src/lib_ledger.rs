@@ -85,7 +85,7 @@ fn parse_optional_object_id(id_str: &str) -> Result<Option<ObjectID>, String> {
 ///   `iota keytool export --key-identity <address>`
 /// - **Base64** (33 bytes): IOTA keystore format (0x00 scheme flag + 32-byte key)
 /// - **Base64** (32 bytes): Raw Ed25519 private key
-fn decode_ed25519_key_to_jwk(secret_key_input: &str) -> Result<Jwk, String> {
+pub fn decode_ed25519_key_to_jwk(secret_key_input: &str) -> Result<Jwk, String> {
     let raw_key_bytes: Vec<u8> = if secret_key_input.starts_with("iotaprivkey") {
         // Bech32m-encoded IOTA private key (iotaprivkey1...)
         decode_bech32m_privkey(secret_key_input)?
@@ -119,7 +119,7 @@ fn decode_ed25519_key_to_jwk(secret_key_input: &str) -> Result<Jwk, String> {
 ///
 /// Format: HRP "iotaprivkey" + Bech32m data = [scheme_flag (1 byte) + key (32 bytes)]
 /// Scheme flag 0x00 = Ed25519.
-fn decode_bech32m_privkey(input: &str) -> Result<Vec<u8>, String> {
+pub fn decode_bech32m_privkey(input: &str) -> Result<Vec<u8>, String> {
     let (hrp, data) = bech32::decode(input)
         .map_err(|e| format!("Invalid Bech32m key '{}...': {}", &input[..20.min(input.len())], e))?;
 
@@ -152,7 +152,7 @@ fn decode_bech32m_privkey(input: &str) -> Result<Vec<u8>, String> {
 /// Accepts:
 /// - 33 bytes: IOTA keystore format (0x00 scheme flag + 32-byte key)
 /// - 32 bytes: Raw Ed25519 private key
-fn decode_base64_privkey(input: &str) -> Result<Vec<u8>, String> {
+pub fn decode_base64_privkey(input: &str) -> Result<Vec<u8>, String> {
     let key_bytes = base64::engine::general_purpose::STANDARD
         .decode(input)
         .map_err(|e| format!("Invalid base64 key: {}", e))?;

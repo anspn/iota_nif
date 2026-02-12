@@ -15,11 +15,20 @@ rustler = "0.34"
 # v1.8.0-beta.2 — compatible with IOTA Rebased networks
 identity_iota = { git = "https://github.com/iotaledger/identity.git", tag = "v1.8.0-beta.2", features = ["iota-client", "send-sync", "memstore"] }
 
-# Shared IOTA product types (NetworkName, etc.)
+# Official IOTA Notarization library for on-chain notarization operations
+notarization = { git = "https://github.com/iotaledger/notarization", tag = "v0.1", features = ["send-sync"] }
+
+# Shared IOTA product types (NetworkName, etc.) — v0.8.8 matches identity_iota
 product_common = { git = "https://github.com/iotaledger/product-core.git", tag = "v0.8.8" }
 
-# IOTA SDK for network client operations (Rebased/MoveVM)
+# IOTA interaction layer (same version as notarization) — provides KeyPairSigner
+iota_interaction = { git = "https://github.com/iotaledger/product-core.git", tag = "v0.8.10", features = ["keypair-signer"] }
+
+# IOTA SDK for DID/identity operations (v1.13.1 — matches identity_iota)
 iota-sdk = { git = "https://github.com/iotaledger/iota.git", package = "iota-sdk", tag = "v1.13.1" }
+
+# IOTA SDK for notarization operations (v1.15.0 — matches notarization crate)
+iota-sdk-v15 = { git = "https://github.com/iotaledger/iota.git", package = "iota-sdk", tag = "v1.15.0" }
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

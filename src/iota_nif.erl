@@ -25,7 +25,13 @@
     create_notarization_payload/2,
     verify_notarization_payload/1,
     hash_data/1,
-    is_valid_hex_string/1
+    is_valid_hex_string/1,
+    %% Notarization Ledger NIFs (IOTA Rebased / MoveVM — official notarization library)
+    create_notarization/5,
+    create_dynamic_notarization/5,
+    read_notarization/3,
+    update_notarization_state/5,
+    destroy_notarization/4
 ]).
 
 %% NIF loading
@@ -113,4 +119,43 @@ hash_data(_Data) ->
 %% @private
 -spec is_valid_hex_string(binary()) -> boolean().
 is_valid_hex_string(_Input) ->
+    erlang:nif_error(nif_not_loaded).
+
+%%%===================================================================
+%%% Notarization Ledger NIFs (IOTA Rebased / MoveVM — official library)
+%%%===================================================================
+
+%% @private
+%% @doc Create a locked (immutable) notarization on-chain.
+-spec create_notarization(binary(), binary(), binary(), binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+create_notarization(_NodeUrl, _SecretKey, _NotarizePkgId, _StateData, _Description) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Create a dynamic (updatable) notarization on-chain.
+-spec create_dynamic_notarization(binary(), binary(), binary(), binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+create_dynamic_notarization(_NodeUrl, _SecretKey, _NotarizePkgId, _StateData, _Description) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Read a notarization from the ledger by object ID (read-only).
+-spec read_notarization(binary(), binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+read_notarization(_NodeUrl, _ObjectId, _NotarizePkgId) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Update the state of a dynamic notarization.
+-spec update_notarization_state(binary(), binary(), binary(), binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+update_notarization_state(_NodeUrl, _SecretKey, _NotarizePkgId, _ObjectId, _NewStateData) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Destroy a notarization on the ledger.
+-spec destroy_notarization(binary(), binary(), binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+destroy_notarization(_NodeUrl, _SecretKey, _NotarizePkgId, _ObjectId) ->
     erlang:nif_error(nif_not_loaded).

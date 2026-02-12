@@ -68,7 +68,15 @@
     ledger_empty_node_url/1,
     ledger_empty_did_resolve/1,
     ledger_non_utf8_inputs/1,
-    ledger_wrong_types/1
+    ledger_wrong_types/1,
+    
+    %% Notarization Ledger NIF resilience
+    notarize_ledger_empty_inputs/1,
+    notarize_ledger_non_utf8_inputs/1,
+    notarize_ledger_wrong_types/1,
+    notarize_read_empty_inputs/1,
+    notarize_read_non_utf8_inputs/1,
+    notarize_read_wrong_types/1
 ]).
 
 %%%===================================================================
@@ -131,7 +139,13 @@ groups() ->
             ledger_empty_node_url,
             ledger_empty_did_resolve,
             ledger_non_utf8_inputs,
-            ledger_wrong_types
+            ledger_wrong_types,
+            notarize_ledger_empty_inputs,
+            notarize_ledger_non_utf8_inputs,
+            notarize_ledger_wrong_types,
+            notarize_read_empty_inputs,
+            notarize_read_non_utf8_inputs,
+            notarize_read_wrong_types
         ]}
     ].
 
@@ -555,6 +569,94 @@ ledger_wrong_types(_Config) ->
     %% Pass wrong types to ledger NIFs - should raise badarg
     ?assertError(badarg, iota_did_nif:create_and_publish_did(atom, atom, atom)),
     ?assertError(badarg, iota_did_nif:resolve_did(123, 456)).
+
+%%%===================================================================
+%%% Notarization Ledger NIF Resilience Tests
+%%%===================================================================
+
+notarize_ledger_empty_inputs(_Config) ->
+    %% All empty inputs should return error, not crash
+    R1 = iota_notarization_nif:create_notarization(<<>>, <<>>, <<>>, <<>>),
+    ct:pal("create_notarization(all empty) = ~p", [R1]),
+    ?assertMatch({error, _}, R1),
+    
+    %% Empty key with valid-looking other params
+    R2 = iota_notarization_nif:create_notarization(
+        <<>>, <<"http://localhost:9000">>, <<"0x1">>, <<"some data">>),
+    ct:pal("create_notarization(empty key) = ~p", [R2]),
+    ?assertMatch({error, _}, R2),
+    
+    %% Empty description is allowed (non-required field)
+    R3 = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<"http://localhost:9000">>, <<"0x1">>, <<"some data">>, <<>>),
+    ct:pal("create_notarization(empty desc) = ~p", [R3]),
+    %% This may return error due to invalid key/connection — but should not crash
+    ?assert(is_tuple(R3)).
+
+notarize_ledger_non_utf8_inputs(_Config) ->
+    InvalidUtf8 = <<128, 129, 130, 255>>,
+    
+    %% Non-UTF8 in various positions — should return error, not crash
+    R1 = iota_notarization_nif:create_notarization(
+        InvalidUtf8, <<"http://localhost">>, <<"0x1">>, <<"some data">>),
+    ct:pal("create_notarization(non-utf8 key) = ~p", [R1]),
+    ?assertMatch({error, _}, R1),
+    
+    R2 = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, InvalidUtf8, <<"0x1">>, <<"some data">>),
+    ct:pal("create_notarization(non-utf8 url) = ~p", [R2]),
+    ?assertMatch({error, _}, R2),
+    
+    R3 = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<"http://localhost">>, InvalidUtf8, <<"some data">>),
+    ct:pal("create_notarization(non-utf8 pkg_id) = ~p", [R3]),
+    ?assertMatch({error, _}, R3),
+    
+    R4 = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<"http://localhost">>, <<"0x1">>, InvalidUtf8),
+    ct:pal("create_notarization(non-utf8 state_data) = ~p", [R4]),
+    ?assertMatch({error, _}, R4).
+
+notarize_ledger_wrong_types(_Config) ->
+    %% Pass wrong types — should raise badarg from Rustler
+    ?assertError(badarg, iota_notarization_nif:create_notarization(
+        atom, atom, atom, atom)),
+    ?assertError(badarg, iota_notarization_nif:create_notarization(
+        123, 456, 789, 0)).
+
+notarize_read_empty_inputs(_Config) ->
+    %% Empty inputs should return error, not crash
+    R1 = iota_notarization_nif:read_notarization(<<>>, <<>>, <<>>),
+    ct:pal("read_notarization(all empty) = ~p", [R1]),
+    ?assertMatch({error, _}, R1),
+    
+    R2 = iota_notarization_nif:read_notarization(
+        <<>>, <<"0x1">>, <<"0x1">>),
+    ct:pal("read_notarization(empty url) = ~p", [R2]),
+    ?assertMatch({error, _}, R2),
+    
+    R3 = iota_notarization_nif:read_notarization(
+        <<"http://localhost:9000">>, <<>>, <<"0x1">>),
+    ct:pal("read_notarization(empty object_id) = ~p", [R3]),
+    ?assertMatch({error, _}, R3).
+
+notarize_read_non_utf8_inputs(_Config) ->
+    InvalidUtf8 = <<128, 129, 130, 255>>,
+    
+    R1 = iota_notarization_nif:read_notarization(
+        InvalidUtf8, <<"0x1">>, <<"0x1">>),
+    ct:pal("read_notarization(non-utf8 url) = ~p", [R1]),
+    ?assertMatch({error, _}, R1),
+    
+    R2 = iota_notarization_nif:read_notarization(
+        <<"http://localhost">>, InvalidUtf8, <<"0x1">>),
+    ct:pal("read_notarization(non-utf8 object_id) = ~p", [R2]),
+    ?assertMatch({error, _}, R2).
+
+notarize_read_wrong_types(_Config) ->
+    %% Pass wrong types — should raise badarg from Rustler
+    ?assertError(badarg, iota_notarization_nif:read_notarization(atom, atom, atom)),
+    ?assertError(badarg, iota_notarization_nif:read_notarization(123, 456, 789)).
 
 %%%===================================================================
 %%% Helpers

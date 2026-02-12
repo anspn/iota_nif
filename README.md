@@ -7,7 +7,8 @@ A Rust NIF (Native Implemented Function) library that provides IOTA DID (Decentr
 - **Local DID operations**: Generate DID documents, extract DIDs, create DID URLs, validate DIDs
 - **Ledger publishing**: Publish DID documents on-chain via IOTA Rebased MoveVM transactions
 - **DID resolution**: Resolve published DIDs from the IOTA ledger
-- **Notarization**: Hash and notarize data payloads
+- **Notarization**: Hash and notarize data payloads (local and on-chain)
+- **On-chain notarization**: Create, read, update, and destroy notarizations on the IOTA Rebased ledger via the [official IOTA notarization library](https://github.com/iotaledger/notarization)
 - **Key format support**: Accepts Ed25519 keys in Bech32 (`iotaprivkey1...`), Base64 (33-byte keystore), or raw Base64 (32-byte) formats
 - **Library-first design**: All sensitive parameters (keys, node URLs, package IDs) are passed explicitly by the consuming application — no hidden environment variable or application config reads
 
@@ -168,6 +169,91 @@ pkg_id = "0xabc123..."
 result = Jason.decode!(result_json)
 ```
 
+### Notarization — Local Operations
+
+```erlang
+%% Hash data with SHA-256
+DataHash = iota_notarization_nif:hash_data(<<"My document content">>).
+%% => <<"a1b2c3d4...">> (64-char hex string)
+
+%% Create a notarization payload (local, no network)
+{ok, PayloadJson} = iota_notarization_nif:create_notarization_payload(DataHash, <<"doc-v1">>).
+
+%% Verify a notarization payload
+{ok, VerifyJson} = iota_notarization_nif:verify_notarization_payload(PayloadHex).
+```
+
+### Notarization — On-Chain (IOTA Rebased)
+
+On-chain notarization uses the [official IOTA notarization library](https://github.com/iotaledger/notarization).
+The notarization Move package is natively available on IOTA mainnet/testnet.
+
+#### Create a Locked Notarization (Immutable)
+
+```erlang
+SecretKey = <<"iotaprivkey1qz...">>,
+NodeUrl = <<"http://127.0.0.1:9000">>,
+NotarizePkgId = <<"0xabc123...">>,          %% notarization package ObjectID
+
+%% Hash your data
+DataHash = iota_notarization_nif:hash_data(<<"Legal contract content...">>),
+
+%% Create a locked notarization (immutable — ideal for proof-of-existence)
+{ok, ResultJson} = iota_notarization_nif:create_notarization(
+    SecretKey, NodeUrl, NotarizePkgId, DataHash
+).
+
+%% With optional description
+{ok, ResultJson} = iota_notarization_nif:create_notarization(
+    SecretKey, NodeUrl, NotarizePkgId, DataHash, <<"contract-2026-001">>
+).
+
+%% Result contains:
+%%   object_id        - On-chain notarization object ID
+%%   tx_digest        - Transaction digest
+%%   state_data       - The notarized data
+%%   description      - Description label
+%%   method           - "locked"
+```
+
+#### Read a Notarization
+
+```erlang
+%% Read using the object ID from create
+{ok, ReadJson} = iota_notarization_nif:read_notarization(
+    NodeUrl, ObjectId, NotarizePkgId
+).
+
+%% Result contains:
+%%   object_id          - The notarization object ID
+%%   state_data         - The notarized data
+%%   state_metadata     - Optional metadata
+%%   description        - Description label
+%%   method             - "Locked" or "Dynamic"
+%%   created_at         - Creation timestamp
+%%   last_state_change_at - Last state change timestamp
+%%   state_version_count  - Number of state updates
+```
+
+#### Dynamic Notarizations (Updatable)
+
+```erlang
+%% Create a dynamic notarization (state can be updated)
+{ok, ResultJson} = iota_notarization_nif:create_dynamic_notarization(
+    SecretKey, NodeUrl, NotarizePkgId, <<"Status: Active">>, <<"Service Monitor">>
+).
+
+%% Update the state
+{ok, UpdateJson} = iota_notarization_nif:update_notarization_state(
+    SecretKey, NodeUrl, NotarizePkgId, ObjectId, <<"Status: Inactive">>
+).
+
+%% Destroy a notarization
+{ok, DestroyJson} = iota_notarization_nif:destroy_notarization(
+    SecretKey, NodeUrl, NotarizePkgId, ObjectId
+).
+```
+
 ## API Reference
 
 ### DID Operations (local, no network)
@@ -189,6 +275,27 @@ result = Jason.decode!(result_json)
 | `resolve_did(Did, NodeUrl)` | Resolve a published DID |
 | `resolve_did(Did, NodeUrl, IdentityPkgId)` | Resolve with explicit package ID |
 
+### Notarization Operations (local, no network)
+
+| Function | Description |
+|----------|-------------|
+| `hash_data(Data)` | SHA-256 hash, returns hex string |
+| `create_notarization_payload(DataHash, Tag)` | Create timestamped notarization payload |
+| `verify_notarization_payload(PayloadHex)` | Verify and extract payload data |
+| `is_valid_hex_string(Input)` | Validate hex format |
+
+### Notarization Ledger Operations (require IOTA node + notarization package)
+
+| Function | Description |
+|----------|-------------|
+| `create_notarization(SecretKey, NodeUrl, PkgId, StateData)` | Create locked notarization (auto gas) |
+| `create_notarization(SecretKey, NodeUrl, PkgId, StateData, Description)` | Create locked with description |
+| `create_dynamic_notarization(SecretKey, NodeUrl, PkgId, StateData)` | Create dynamic notarization |
+| `create_dynamic_notarization(SecretKey, NodeUrl, PkgId, StateData, Description)` | Create dynamic with description |
+| `read_notarization(NodeUrl, ObjectId, PkgId)` | Read notarization from ledger |
+| `update_notarization_state(SecretKey, NodeUrl, PkgId, ObjectId, NewStateData)` | Update dynamic notarization state |
+| `destroy_notarization(SecretKey, NodeUrl, PkgId, ObjectId)` | Destroy a notarization |
+
 ## Project Structure
 
 ```
@@ -203,9 +310,11 @@ iota_nif/
 │   ├── lib.rs                # Rust NIF entry point
 │   ├── lib_did.rs            # Local DID operations (Rust)
 │   ├── lib_ledger.rs         # Ledger publish/resolve (Rust)
-│   ├── lib_notarization.rs   # Notarization (Rust)
-│   └── identity/
-│       └── iota_did_nif.erl  # Public Erlang API for DID operations
+│   ├── lib_notarization.rs   # Notarization local + ledger (Rust, uses official library)
+│   ├── identity/
+│   │   └── iota_did_nif.erl  # Public Erlang API for DID operations
+│   └── notarization/
+│       └── iota_notarization_nif.erl  # Public Erlang API for notarization
 ├── test/
 │   ├── iota_did_nif_SUITE.erl
 │   ├── iota_notarization_nif_SUITE.erl
@@ -221,12 +330,16 @@ iota_nif/
 │  Erlang/Elixir  │────▶│   Rust NIF       │────▶│  IOTA Identity   │
 │     Process     │     │   (rustler)      │     │  SDK v1.8.0-β2   │
 └─────────────────┘     └──────────────────┘     └──────────────────┘
-                                                         │
-                                                         ▼
-                                                  ┌──────────────────┐
-                                                  │  IOTA Rebased    │
-                                                  │  Node (MoveVM)   │
-                                                  └──────────────────┘
+                                │                        │
+                                │                        ▼
+                                │                 ┌──────────────────┐
+                                │                 │  IOTA Rebased    │
+                                │                 │  Node (MoveVM)   │
+                                ▼                 └──────────────────┘
+                         ┌──────────────────┐            ▲
+                         │  IOTA Notarize   │────────────┘
+                         │  Library v0.1    │
+                         └──────────────────┘
 ```
 
 ## Running Tests
@@ -238,7 +351,7 @@ rebar3 ct
 # Run only specific suite
 rebar3 ct --suite=iota_did_nif_SUITE
 
-# Run integration tests against a local IOTA node
+# Run DID integration tests against a local IOTA node
 # Required environment variables:
 #   IOTA_TEST_SECRET_KEY   - Ed25519 private key (Bech32 or Base64)
 #   IOTA_IDENTITY_PKG_ID   - ObjectID of the iota_identity Move package
@@ -248,6 +361,16 @@ rebar3 ct --suite=iota_did_nif_SUITE
 IOTA_TEST_SECRET_KEY="iotaprivkey1qz..." \
 IOTA_IDENTITY_PKG_ID="0x..." \
 rebar3 ct --suite=iota_did_nif_SUITE --group=ledger_integration
+
+# Run notarization ledger integration tests
+# Required environment variables:
+#   IOTA_NODE_URL          - IOTA node URL
+#   IOTA_SECRET_KEY        - Ed25519 private key
+#   IOTA_NOTARIZE_PKG_ID   - ObjectID of the deployed notarize Move package
+IOTA_NODE_URL="http://127.0.0.1:9000" \
+IOTA_SECRET_KEY="iotaprivkey1qz..." \
+IOTA_NOTARIZE_PKG_ID="0x..." \
+rebar3 ct --suite=iota_notarization_nif_SUITE --group=ledger_integration
 ```
 
 ## License

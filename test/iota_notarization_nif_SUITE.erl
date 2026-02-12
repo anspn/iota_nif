@@ -39,7 +39,21 @@
     notarize_and_retrieve/1,
     notarize_document/1,
     verify_retrieved_payload/1,
-    full_notarization_lifecycle/1
+    full_notarization_lifecycle/1,
+    %% Ledger error handling (no live node needed)
+    create_empty_node_url/1,
+    create_empty_secret_key/1,
+    create_empty_pkg_id/1,
+    create_empty_state_data/1,
+    create_invalid_pkg_id_format/1,
+    create_connection_refused/1,
+    read_empty_node_url/1,
+    read_empty_object_id/1,
+    read_empty_pkg_id/1,
+    read_invalid_object_id/1,
+    read_connection_refused/1,
+    %% Ledger integration (requires live node — skipped by default)
+    create_and_read_integration/1
 ]).
 
 %%%===================================================================
@@ -49,7 +63,9 @@
 all() ->
     [
         {group, local_operations},
-        {group, mock_mainnet_operations}
+        {group, mock_mainnet_operations},
+        {group, ledger_error_handling},
+        {group, ledger_integration}
     ].
 
 groups() ->
@@ -71,6 +87,22 @@ groups() ->
             notarize_document,
             verify_retrieved_payload,
             full_notarization_lifecycle
+        ]},
+        {ledger_error_handling, [parallel], [
+            create_empty_node_url,
+            create_empty_secret_key,
+            create_empty_pkg_id,
+            create_empty_state_data,
+            create_invalid_pkg_id_format,
+            create_connection_refused,
+            read_empty_node_url,
+            read_empty_object_id,
+            read_empty_pkg_id,
+            read_invalid_object_id,
+            read_connection_refused
+        ]},
+        {ledger_integration, [sequence], [
+            create_and_read_integration
         ]}
     ].
 
@@ -83,6 +115,21 @@ end_per_suite(_Config) ->
 init_per_group(mock_mainnet_operations, Config) ->
     {ok, _Pid} = iota_client_mock:start_link(),
     Config;
+init_per_group(ledger_integration, Config) ->
+    %% Skip integration tests unless IOTA_NODE_URL and IOTA_SECRET_KEY are set
+    case {os:getenv("IOTA_NODE_URL"), os:getenv("IOTA_SECRET_KEY"), os:getenv("IOTA_NOTARIZE_PKG_ID")} of
+        {false, _, _} ->
+            {skip, "IOTA_NODE_URL not set — skipping ledger integration tests"};
+        {_, false, _} ->
+            {skip, "IOTA_SECRET_KEY not set — skipping ledger integration tests"};
+        {_, _, false} ->
+            {skip, "IOTA_NOTARIZE_PKG_ID not set — skipping ledger integration tests"};
+        {NodeUrl, SecretKey, PkgId} ->
+            [{node_url, list_to_binary(NodeUrl)},
+             {secret_key, list_to_binary(SecretKey)},
+             {notarize_pkg_id, list_to_binary(PkgId)}
+             | Config]
+    end;
 init_per_group(_Group, Config) ->
     Config.
 
@@ -343,6 +390,127 @@ full_notarization_lifecycle(_Config) ->
     ?assert(HashMatches),
     
     ct:pal("=== Lifecycle Complete: Document existence proven! ===").
+
+%%%===================================================================
+%%% Ledger Error Handling Tests
+%%%===================================================================
+
+create_empty_node_url(_Config) ->
+    {error, Reason} = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<>>, <<"0x1">>, <<"some data">>),
+    ?assert(binary:match(Reason, <<"node_url">>) =/= nomatch).
+
+create_empty_secret_key(_Config) ->
+    {error, Reason} = iota_notarization_nif:create_notarization(
+        <<>>, <<"http://localhost:9000">>, <<"0x1">>, <<"some data">>),
+    ?assert(binary:match(Reason, <<"secret_key">>) =/= nomatch).
+
+create_empty_pkg_id(_Config) ->
+    {error, Reason} = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<"http://localhost:9000">>, <<>>, <<"some data">>),
+    ?assert(binary:match(Reason, <<"notarize_pkg_id">>) =/= nomatch).
+
+create_empty_state_data(_Config) ->
+    {error, Reason} = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<"http://localhost:9000">>, <<"0x1">>, <<>>),
+    ?assert(binary:match(Reason, <<"state_data">>) =/= nomatch).
+
+create_invalid_pkg_id_format(_Config) ->
+    %% Valid state_data but invalid ObjectID format for package
+    {error, Reason} = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<"http://localhost:9000">>, <<"invalid-object-id">>,
+        <<"some data to notarize">>),
+    ct:pal("Error for invalid pkg_id: ~s", [Reason]),
+    ?assert(is_binary(Reason)),
+    ?assert(byte_size(Reason) > 0).
+
+create_connection_refused(_Config) ->
+    %% Use a port that's unlikely to have an IOTA node
+    {error, Reason} = iota_notarization_nif:create_notarization(
+        <<"dummykey">>, <<"http://127.0.0.1:59999">>,
+        <<"0x0000000000000000000000000000000000000000000000000000000000000001">>,
+        <<"some data to notarize">>),
+    ct:pal("Connection refused error: ~s", [Reason]),
+    ?assert(is_binary(Reason)),
+    ?assert(byte_size(Reason) > 0).
+
+read_empty_node_url(_Config) ->
+    {error, Reason} = iota_notarization_nif:read_notarization(
+        <<>>, <<"0x1">>, <<"0x1">>),
+    ?assert(binary:match(Reason, <<"node_url">>) =/= nomatch).
+
+read_empty_object_id(_Config) ->
+    {error, Reason} = iota_notarization_nif:read_notarization(
+        <<"http://localhost:9000">>, <<>>, <<"0x1">>),
+    ?assert(binary:match(Reason, <<"object_id">>) =/= nomatch).
+
+read_empty_pkg_id(_Config) ->
+    {error, Reason} = iota_notarization_nif:read_notarization(
+        <<"http://localhost:9000">>, <<"0x1">>, <<>>),
+    ?assert(binary:match(Reason, <<"notarize_pkg_id">>) =/= nomatch).
+
+read_invalid_object_id(_Config) ->
+    {error, Reason} = iota_notarization_nif:read_notarization(
+        <<"http://localhost:9000">>, <<"not-a-valid-id!@#$">>, <<"0x1">>),
+    ct:pal("Invalid object_id error: ~s", [Reason]),
+    ?assert(is_binary(Reason)).
+
+read_connection_refused(_Config) ->
+    %% Valid-looking IDs but no node available
+    {error, Reason} = iota_notarization_nif:read_notarization(
+        <<"http://127.0.0.1:59999">>,
+        <<"0x0000000000000000000000000000000000000000000000000000000000000001">>,
+        <<"0x0000000000000000000000000000000000000000000000000000000000000001">>),
+    ct:pal("Connection refused error: ~s", [Reason]),
+    ?assert(is_binary(Reason)).
+
+%%%===================================================================
+%%% Ledger Integration Tests (requires live IOTA node)
+%%%===================================================================
+
+create_and_read_integration(Config) ->
+    NodeUrl = ?config(node_url, Config),
+    SecretKey = ?config(secret_key, Config),
+    PkgId = ?config(notarize_pkg_id, Config),
+
+    ct:pal("=== Ledger Integration Test ==="),
+    ct:pal("Node URL: ~s", [NodeUrl]),
+    ct:pal("Package ID: ~s", [PkgId]),
+
+    %% 1. Hash some data
+    Data = <<"Integration test document - notarization on IOTA ledger">>,
+    DataHash = iota_notarization_nif:hash_data(Data),
+    ct:pal("Data hash: ~s", [DataHash]),
+
+    %% 2. Create a locked notarization on-chain
+    ct:pal("Creating notarization on-chain..."),
+    {ok, CreateJson} = iota_notarization_nif:create_notarization(
+        SecretKey, NodeUrl, PkgId, DataHash, <<"integration-test">>),
+    CreateResult = decode_json(CreateJson),
+    ct:pal("Create result: ~p", [CreateResult]),
+
+    ObjectId = maps:get(<<"object_id">>, CreateResult),
+    TxDigest = maps:get(<<"tx_digest">>, CreateResult),
+    ?assert(is_binary(ObjectId)),
+    ?assert(is_binary(TxDigest)),
+    ?assert(byte_size(ObjectId) > 0),
+    ?assert(byte_size(TxDigest) > 0),
+    ?assertEqual(DataHash, maps:get(<<"state_data">>, CreateResult)),
+
+    ct:pal("Object ID: ~s", [ObjectId]),
+    ct:pal("Transaction digest: ~s", [TxDigest]),
+
+    %% 3. Read notarization from the ledger
+    ct:pal("Reading notarization from ledger..."),
+    {ok, ReadJson} = iota_notarization_nif:read_notarization(NodeUrl, ObjectId, PkgId),
+    ReadResult = decode_json(ReadJson),
+    ct:pal("Read result: ~p", [ReadResult]),
+
+    ?assertEqual(ObjectId, maps:get(<<"object_id">>, ReadResult)),
+    ?assertEqual(DataHash, maps:get(<<"state_data">>, ReadResult)),
+    ?assertEqual(<<"Locked">>, maps:get(<<"method">>, ReadResult)),
+
+    ct:pal("=== Ledger Integration Test Complete ===").
 
 %%%===================================================================
 %%% Helpers
