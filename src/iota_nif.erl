@@ -20,6 +20,7 @@
     is_valid_iota_did/1,
     %% Ledger NIFs (IOTA Rebased / MoveVM)
     create_and_publish_did/4,
+    deactivate_did/4,
     resolve_did/3,
     %% Notarization NIFs
     create_notarization_payload/2,
@@ -89,6 +90,13 @@ is_valid_iota_did(_Did) ->
 %% IdentityPkgId can be an empty binary for auto-discovery on known networks.
 -spec create_and_publish_did(binary(), binary(), binary(), binary()) -> {ok, binary()} | {error, binary()}.
 create_and_publish_did(_NodeUrl, _SecretKey, _GasCoinId, _IdentityPkgId) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Deactivate (revoke) a DID on-chain. Caller must be a controller.
+%% IdentityPkgId can be an empty binary for auto-discovery on known networks.
+-spec deactivate_did(binary(), binary(), binary(), binary()) -> {ok, binary()} | {error, binary()}.
+deactivate_did(_NodeUrl, _SecretKey, _Did, _IdentityPkgId) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @private

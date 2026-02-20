@@ -353,12 +353,12 @@ rebar3 ct --suite=iota_did_nif_SUITE
 
 # Run DID integration tests against a local IOTA node
 # Required environment variables:
-#   IOTA_TEST_SECRET_KEY   - Ed25519 private key (Bech32 or Base64)
+#   IOTA_SECRET_KEY   - Ed25519 private key (Bech32 or Base64)
 #   IOTA_IDENTITY_PKG_ID   - ObjectID of the iota_identity Move package
 # Optional:
-#   IOTA_TEST_GAS_COIN_ID  - Specific gas coin ObjectID (auto-selected if omitted)
-#   IOTA_TEST_NODE_URL     - Node URL (defaults to http://127.0.0.1:9000)
-IOTA_TEST_SECRET_KEY="iotaprivkey1qz..." \
+#   IOTA_GAS_COIN_ID  - Specific gas coin ObjectID (auto-selected if omitted)
+#   IOTA_NODE_URL     - Node URL (defaults to http://127.0.0.1:9000)
+IOTA_SECRET_KEY="iotaprivkey1qz..." \
 IOTA_IDENTITY_PKG_ID="0x..." \
 rebar3 ct --suite=iota_did_nif_SUITE --group=ledger_integration
 

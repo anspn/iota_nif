@@ -256,6 +256,78 @@ pub fn create_and_publish_did(
     }
 }
 
+/// Deactivate (revoke) a DID on the IOTA Rebased ledger.
+///
+/// This permanently deactivates the DID document on-chain. After
+/// deactivation, the DID can no longer be resolved to an active document.
+/// The caller must be a controller of the DID's on-chain identity.
+///
+/// **Warning**: This operation is irreversible. Once deactivated, the DID
+/// cannot be reactivated.
+///
+/// Parameters:
+/// - node_url: URL of the IOTA node (e.g., "http://127.0.0.1:9000")
+/// - secret_key: Ed25519 private key of a controller (Bech32, Base64 33-byte,
+///   or Base64 32-byte format)
+/// - did_str: The DID to deactivate (e.g., "did:iota:0xabc...")
+/// - identity_pkg_id: ObjectID of the deployed iota_identity Move package,
+///   or empty binary for auto-discovery
+///
+/// Returns: {:ok, "deactivated"} | {:error, reason}
+#[rustler::nif(schedule = "DirtyCpu")]
+pub fn deactivate_did(
+    node_url: Binary,
+    secret_key: Binary,
+    did_str: Binary,
+    identity_pkg_id: Binary,
+) -> NifResult<(rustler::Atom, String)> {
+    let node_url_str = match std::str::from_utf8(node_url.as_slice()) {
+        Ok(s) => s.to_string(),
+        Err(_) => return Ok((atoms::error(), "Invalid node URL: not valid UTF-8".to_string())),
+    };
+    let key_str = match std::str::from_utf8(secret_key.as_slice()) {
+        Ok(s) => s.to_string(),
+        Err(_) => return Ok((atoms::error(), "Invalid key: not valid UTF-8".to_string())),
+    };
+    let did_string = match std::str::from_utf8(did_str.as_slice()) {
+        Ok(s) => s.to_string(),
+        Err(_) => return Ok((atoms::error(), "Invalid DID: not valid UTF-8".to_string())),
+    };
+    let pkg_str = match std::str::from_utf8(identity_pkg_id.as_slice()) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            return Ok((
+                atoms::error(),
+                "Invalid identity package ID: not valid UTF-8".to_string(),
+            ))
+        }
+    };
+
+    let package_id = match parse_optional_object_id(&pkg_str) {
+        Ok(id) => id,
+        Err(e) => return Ok((atoms::error(), e)),
+    };
+
+    let rt = match runtime() {
+        Some(rt) => rt,
+        None => {
+            return Ok((
+                atoms::error(),
+                "Failed to initialize async runtime".to_string(),
+            ))
+        }
+    };
+
+    let result = rt.block_on(async {
+        deactivate_did_async(&node_url_str, &key_str, &did_string, package_id).await
+    });
+
+    match result {
+        Ok(()) => Ok((atoms::ok(), "deactivated".to_string())),
+        Err(e) => Ok((atoms::error(), e)),
+    }
+}
+
 /// Resolve a DID document from the IOTA Rebased ledger.
 ///
 /// Connects to the specified IOTA node and retrieves the DID document
@@ -410,6 +482,67 @@ async fn create_and_publish_did_async(
         network: identity_client.network().to_string(),
         sender_address: identity_client.address().to_string(),
     })
+}
+
+/// Deactivate (revoke) a DID on the ledger using the caller's Ed25519 key
+async fn deactivate_did_async(
+    node_url: &str,
+    secret_key_input: &str,
+    did_str: &str,
+    package_id: Option<ObjectID>,
+) -> Result<(), String> {
+    // Decode the secret key and create JWK
+    let jwk = decode_ed25519_key_to_jwk(secret_key_input)?;
+
+    // Create in-memory storage and import the user's key
+    let storage: Storage<JwkMemStore, KeyIdMemstore> =
+        Storage::new(JwkMemStore::new(), KeyIdMemstore::new());
+
+    let key_id = storage
+        .key_storage()
+        .insert(jwk.clone())
+        .await
+        .map_err(|e| format!("Failed to import key into storage: {:?}", e))?;
+
+    let public_jwk = jwk
+        .to_public()
+        .ok_or_else(|| "Failed to derive public JWK from private key".to_string())?;
+
+    // Create a signer from the imported key
+    let signer = StorageSigner::new(&storage, key_id, public_jwk);
+
+    // Connect to the IOTA node
+    let iota_client = IotaClientBuilder::default()
+        .build(node_url)
+        .await
+        .map_err(|e| format!("Failed to connect to IOTA node '{}': {}", node_url, e))?;
+
+    // Build the IdentityClientReadOnly
+    let read_only_client = match package_id {
+        Some(pkg_id) => IdentityClientReadOnly::new_with_pkg_id(iota_client, pkg_id)
+            .await
+            .map_err(|e| format!("Failed to create identity client: {}", e))?,
+        None => IdentityClientReadOnly::new(iota_client)
+            .await
+            .map_err(|e| format!("Failed to create identity client: {}", e))?,
+    };
+
+    // Create identity client with signer
+    let identity_client = IdentityClient::new(read_only_client, signer)
+        .await
+        .map_err(|e| format!("Failed to configure signer: {}", e))?;
+
+    // Parse the DID string
+    let did = IotaDID::parse(did_str)
+        .map_err(|e| format!("Invalid DID '{}': {}", did_str, e))?;
+
+    // Deactivate the DID on-chain
+    identity_client
+        .deactivate_did_output(&did, DEFAULT_GAS_BUDGET)
+        .await
+        .map_err(|e| format!("Failed to deactivate DID '{}': {}", did_str, e))?;
+
+    Ok(())
 }
 
 /// Resolve a DID document from the ledger (read-only, no signer needed)

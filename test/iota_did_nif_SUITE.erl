@@ -42,9 +42,12 @@
     %% Ledger operations (network required, skipped if unavailable)
     ledger_resolve_invalid_did/1,
     ledger_publish_invalid_node/1,
+    ledger_deactivate_invalid_node/1,
+    ledger_deactivate_invalid_did/1,
     %% Integration tests (require local IOTA node + IOTA_IDENTITY_PKG_ID)
     ledger_publish_did_on_local_node/1,
-    ledger_publish_and_resolve_on_local_node/1
+    ledger_publish_and_resolve_on_local_node/1,
+    ledger_publish_deactivate_resolve_lifecycle/1
 ]).
 
 %%%===================================================================
@@ -81,11 +84,14 @@ groups() ->
         ]},
         {ledger_error_handling, [sequence], [
             ledger_resolve_invalid_did,
-            ledger_publish_invalid_node
+            ledger_publish_invalid_node,
+            ledger_deactivate_invalid_node,
+            ledger_deactivate_invalid_did
         ]},
         {ledger_integration, [sequence], [
             ledger_publish_did_on_local_node,
-            ledger_publish_and_resolve_on_local_node
+            ledger_publish_and_resolve_on_local_node,
+            ledger_publish_deactivate_resolve_lifecycle
         ]}
     ].
 
@@ -100,19 +106,19 @@ init_per_group(mock_mainnet_operations, Config) ->
     Config;
 init_per_group(ledger_integration, Config) ->
     %% Skip if required env vars are not set (no local node available)
-    case {os:getenv("IOTA_TEST_SECRET_KEY"), os:getenv("IOTA_IDENTITY_PKG_ID")} of
+    case {os:getenv("IOTA_SECRET_KEY"), os:getenv("IOTA_IDENTITY_PKG_ID")} of
         {false, _} ->
-            {skip, "IOTA_TEST_SECRET_KEY not set — skipping integration tests"};
+            {skip, "IOTA_SECRET_KEY not set — skipping integration tests"};
         {_, false} ->
             {skip, "IOTA_IDENTITY_PKG_ID not set — skipping integration tests"};
         {KeyStr, PkgIdStr} ->
             SecretKey = list_to_binary(KeyStr),
             IdentityPkgId = list_to_binary(PkgIdStr),
-            GasCoinId = case os:getenv("IOTA_TEST_GAS_COIN_ID") of
+            GasCoinId = case os:getenv("IOTA_GAS_COIN_ID") of
                 false -> <<>>;
                 G -> list_to_binary(G)
             end,
-            NodeUrl = case os:getenv("IOTA_TEST_NODE_URL") of
+            NodeUrl = case os:getenv("IOTA_NODE_URL") of
                 false -> <<"http://127.0.0.1:9000">>;
                 U -> list_to_binary(U)
             end,
@@ -313,6 +319,28 @@ ledger_publish_invalid_node(_Config) ->
     ct:pal("create_and_publish_did with bad node: ~p", [Result]),
     ?assertMatch({error, _}, Result).
 
+ledger_deactivate_invalid_node(_Config) ->
+    %% Attempting to deactivate with an unreachable node should return error
+    DummyKey = base64:encode(<<0:256>>),
+    Result = iota_did_nif:deactivate_did(
+        DummyKey,
+        <<"did:iota:0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef">>,
+        <<"http://127.0.0.1:1">>
+    ),
+    ct:pal("deactivate_did with bad node: ~p", [Result]),
+    ?assertMatch({error, _}, Result).
+
+ledger_deactivate_invalid_did(_Config) ->
+    %% Attempting to deactivate with an invalid DID format should return error
+    DummyKey = base64:encode(<<0:256>>),
+    Result = iota_did_nif:deactivate_did(
+        DummyKey,
+        <<"not-a-valid-did">>,
+        <<"http://127.0.0.1:9000">>
+    ),
+    ct:pal("deactivate_did with invalid DID: ~p", [Result]),
+    ?assertMatch({error, _}, Result).
+
 %%%===================================================================
 %%% Ledger Integration Tests (require local IOTA node)
 %%%===================================================================
@@ -397,6 +425,46 @@ ledger_publish_and_resolve_on_local_node(Config) ->
     ?assert(is_binary(ResolvedDoc) orelse is_map(ResolvedDoc)),
 
     ct:pal("Successfully published and resolved DID: ~s", [Did]),
+    Config.
+
+ledger_publish_deactivate_resolve_lifecycle(Config) ->
+    SecretKey = ?config(secret_key, Config),
+    NodeUrl = ?config(node_url, Config),
+    IdentityPkgId = ?config(identity_pkg_id, Config),
+
+    ct:pal("=== DID Lifecycle: Publish → Deactivate → Resolve ==="),
+    ct:pal("Node: ~s", [NodeUrl]),
+
+    %% 1. Publish a new DID
+    ct:pal("Step 1: Publishing new DID..."),
+    {ok, PublishJson} = iota_did_nif:create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId),
+    PublishResult = decode_json(PublishJson),
+    Did = maps:get(<<"did">>, PublishResult),
+    ct:pal("Published DID: ~s", [Did]),
+
+    %% 2. Verify the DID is resolvable (active)
+    ct:pal("Step 2: Verifying DID is resolvable..."),
+    {ok, _ResolveJson} = iota_did_nif:resolve_did(Did, NodeUrl, IdentityPkgId),
+    ct:pal("DID resolved successfully (active)"),
+
+    %% 3. Deactivate (revoke) the DID
+    ct:pal("Step 3: Deactivating DID..."),
+    DeactivateResult = iota_did_nif:deactivate_did(SecretKey, Did, NodeUrl, IdentityPkgId),
+    ct:pal("Deactivate result: ~p", [DeactivateResult]),
+    ?assertMatch({ok, <<"deactivated">>}, DeactivateResult),
+
+    %% 4. Attempt to resolve the deactivated DID
+    %% Depending on the SDK version, this may:
+    %%   - Return a deactivated document (metadata indicates deactivation)
+    %%   - Return an error indicating the DID is deactivated
+    ct:pal("Step 4: Attempting to resolve deactivated DID..."),
+    ResolveAfterResult = iota_did_nif:resolve_did(Did, NodeUrl, IdentityPkgId),
+    ct:pal("Resolve after deactivation: ~p", [ResolveAfterResult]),
+    %% The resolve should still succeed but the document should reflect deactivation
+    %% (the exact behavior depends on the SDK — some return the doc with empty methods)
+    ?assertMatch({ok, _}, ResolveAfterResult),
+
+    ct:pal("=== DID lifecycle test complete ==="),
     Config.
 
 %%%===================================================================

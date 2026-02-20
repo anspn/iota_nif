@@ -52,6 +52,8 @@
     %% Ledger operations (IOTA Rebased)
     create_and_publish_did/3,
     create_and_publish_did/4,
+    deactivate_did/3,
+    deactivate_did/4,
     resolve_did/2,
     resolve_did/3
 ]).
@@ -208,6 +210,50 @@ create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId) ->
     {ok, binary()} | {error, binary()}.
 create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId, GasCoinId) ->
     iota_nif:create_and_publish_did(NodeUrl, SecretKey, GasCoinId, IdentityPkgId).
+
+%% @doc Deactivate (revoke) a DID on the IOTA Rebased ledger.
+%%
+%% Permanently deactivates the DID document on-chain. After deactivation,
+%% the DID can no longer be resolved to an active document. The caller
+%% must be a controller of the DID's on-chain identity.
+%%
+%% <b>Warning</b>: This operation is irreversible. Once deactivated, the
+%% DID cannot be reactivated.
+%%
+%% Pass `<<>>' as `IdentityPkgId' for auto-discovery on official networks.
+%%
+%% @param SecretKey Ed25519 private key of a controller (Bech32, Base64
+%%        33-byte, or Base64 32-byte format).
+%% @param Did The DID to deactivate (e.g., `<<"did:iota:0xabc...">>'').
+%% @param NodeUrl URL of the IOTA node.
+%% @returns `{ok, <<"deactivated">>}' on success,
+%%          `{error, Reason}' on failure.
+%% @see deactivate_did/4
+-spec deactivate_did(
+    SecretKey :: binary(), Did :: binary(), NodeUrl :: binary()
+) ->
+    {ok, binary()} | {error, binary()}.
+deactivate_did(SecretKey, Did, NodeUrl) ->
+    deactivate_did(SecretKey, Did, NodeUrl, <<>>).
+
+%% @doc Deactivate (revoke) a DID with explicit identity package ID.
+%%
+%% Same as `deactivate_did/3' but allows specifying the identity package ID
+%% for local/unofficial networks.
+%%
+%% @param SecretKey Ed25519 private key of a controller.
+%% @param Did The DID to deactivate.
+%% @param NodeUrl URL of the IOTA node.
+%% @param IdentityPkgId ObjectID of the identity Move package, or `<<>>'
+%%        for auto-discovery.
+%% @returns `{ok, <<"deactivated">>}' on success, `{error, Reason}' on failure.
+-spec deactivate_did(
+    SecretKey :: binary(), Did :: binary(),
+    NodeUrl :: binary(), IdentityPkgId :: binary()
+) ->
+    {ok, binary()} | {error, binary()}.
+deactivate_did(SecretKey, Did, NodeUrl, IdentityPkgId) ->
+    iota_nif:deactivate_did(NodeUrl, SecretKey, Did, IdentityPkgId).
 
 %% @doc Resolve a DID from the IOTA ledger.
 %%

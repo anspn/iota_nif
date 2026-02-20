@@ -116,15 +116,17 @@ init_per_group(mock_mainnet_operations, Config) ->
     {ok, _Pid} = iota_client_mock:start_link(),
     Config;
 init_per_group(ledger_integration, Config) ->
-    %% Skip integration tests unless IOTA_NODE_URL and IOTA_SECRET_KEY are set
-    case {os:getenv("IOTA_NODE_URL"), os:getenv("IOTA_SECRET_KEY"), os:getenv("IOTA_NOTARIZE_PKG_ID")} of
-        {false, _, _} ->
-            {skip, "IOTA_NODE_URL not set — skipping ledger integration tests"};
-        {_, false, _} ->
+    %% Skip integration tests unless IOTA_SECRET_KEY and IOTA_NOTARIZE_PKG_ID are set
+    case {os:getenv("IOTA_SECRET_KEY"), os:getenv("IOTA_NOTARIZE_PKG_ID")} of
+        {false, _} ->
             {skip, "IOTA_SECRET_KEY not set — skipping ledger integration tests"};
-        {_, _, false} ->
+        {_, false} ->
             {skip, "IOTA_NOTARIZE_PKG_ID not set — skipping ledger integration tests"};
-        {NodeUrl, SecretKey, PkgId} ->
+        {SecretKey, PkgId} ->
+            NodeUrl = case os:getenv("IOTA_NODE_URL") of
+                false -> "http://127.0.0.1:9000";
+                U -> U
+            end,
             [{node_url, list_to_binary(NodeUrl)},
              {secret_key, list_to_binary(SecretKey)},
              {notarize_pkg_id, list_to_binary(PkgId)}

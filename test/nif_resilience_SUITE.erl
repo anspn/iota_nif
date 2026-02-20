@@ -69,6 +69,9 @@
     ledger_empty_did_resolve/1,
     ledger_non_utf8_inputs/1,
     ledger_wrong_types/1,
+    ledger_deactivate_empty_inputs/1,
+    ledger_deactivate_non_utf8_inputs/1,
+    ledger_deactivate_wrong_types/1,
     
     %% Notarization Ledger NIF resilience
     notarize_ledger_empty_inputs/1,
@@ -140,6 +143,9 @@ groups() ->
             ledger_empty_did_resolve,
             ledger_non_utf8_inputs,
             ledger_wrong_types,
+            ledger_deactivate_empty_inputs,
+            ledger_deactivate_non_utf8_inputs,
+            ledger_deactivate_wrong_types,
             notarize_ledger_empty_inputs,
             notarize_ledger_non_utf8_inputs,
             notarize_ledger_wrong_types,
@@ -568,7 +574,44 @@ ledger_non_utf8_inputs(_Config) ->
 ledger_wrong_types(_Config) ->
     %% Pass wrong types to ledger NIFs - should raise badarg
     ?assertError(badarg, iota_did_nif:create_and_publish_did(atom, atom, atom)),
-    ?assertError(badarg, iota_did_nif:resolve_did(123, 456)).
+    ?assertError(badarg, iota_did_nif:resolve_did(123, 456)),
+    ?assertError(badarg, iota_did_nif:deactivate_did(atom, atom, atom)).
+
+ledger_deactivate_empty_inputs(_Config) ->
+    DummyKey = base64:encode(<<0:256>>),
+    %% Empty node URL
+    R1 = iota_did_nif:deactivate_did(DummyKey, <<"did:iota:0x1234">>, <<>>),
+    ct:pal("deactivate_did(key, did, <<>>) = ~p", [R1]),
+    ?assertMatch({error, _}, R1),
+    %% Empty DID
+    R2 = iota_did_nif:deactivate_did(DummyKey, <<>>, <<"http://localhost">>),
+    ct:pal("deactivate_did(key, <<>>, localhost) = ~p", [R2]),
+    ?assertMatch({error, _}, R2),
+    %% Empty key
+    R3 = iota_did_nif:deactivate_did(<<>>, <<"did:iota:0x1234">>, <<"http://localhost">>),
+    ct:pal("deactivate_did(<<>>, did, localhost) = ~p", [R3]),
+    ?assertMatch({error, _}, R3).
+
+ledger_deactivate_non_utf8_inputs(_Config) ->
+    InvalidUtf8 = <<128, 129, 130, 255>>,
+    DummyKey = base64:encode(<<0:256>>),
+    %% Non-UTF8 node URL
+    R1 = iota_did_nif:deactivate_did(DummyKey, <<"did:iota:0x1234">>, InvalidUtf8),
+    ct:pal("deactivate_did(key, did, non-utf8) = ~p", [R1]),
+    ?assertMatch({error, _}, R1),
+    %% Non-UTF8 DID
+    R2 = iota_did_nif:deactivate_did(DummyKey, InvalidUtf8, <<"http://localhost">>),
+    ct:pal("deactivate_did(key, non-utf8, localhost) = ~p", [R2]),
+    ?assertMatch({error, _}, R2),
+    %% Non-UTF8 key
+    R3 = iota_did_nif:deactivate_did(InvalidUtf8, <<"did:iota:0x1234">>, <<"http://localhost">>),
+    ct:pal("deactivate_did(non-utf8, did, localhost) = ~p", [R3]),
+    ?assertMatch({error, _}, R3).
+
+ledger_deactivate_wrong_types(_Config) ->
+    %% Pass wrong types - should raise badarg, not crash
+    ?assertError(badarg, iota_did_nif:deactivate_did(atom, atom, atom)),
+    ?assertError(badarg, iota_did_nif:deactivate_did(123, 456, 789)).
 
 %%%===================================================================
 %%% Notarization Ledger NIF Resilience Tests
