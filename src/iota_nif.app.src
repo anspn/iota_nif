@@ -1,6 +1,6 @@
 {application, iota_nif,
  [{description, "IOTA NIF library for Erlang/OTP"},
-  {vsn, "0.2.0"},
+  {vsn, "0.2.1"},
   {registered, []},
   {applications,
    [kernel,
