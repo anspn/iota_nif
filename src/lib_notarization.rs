@@ -15,7 +15,7 @@ use notarization::core::types::{Data, State};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
-// Reuse key decoding from lib_ledger
+// Reuse key decoding and optional ObjectID parsing from lib_ledger
 use crate::lib_ledger;
 
 /// Result structure for notarization
@@ -190,6 +190,39 @@ fn binary_to_str<'a>(bin: &'a Binary, name: &str) -> Result<&'a str, (rustler::A
         .map_err(|_| (atoms::error(), format!("Invalid {}: not valid UTF-8", name)))
 }
 
+/// Parse an optional ObjectID from a string, returning None for empty strings.
+/// Reuses the same pattern as lib_ledger::parse_optional_object_id.
+fn parse_optional_object_id(id_str: &str) -> Result<Option<ObjectID>, String> {
+    if id_str.is_empty() {
+        Ok(None)
+    } else {
+        let id = id_str
+            .parse::<ObjectID>()
+            .map_err(|e| format!("Invalid ObjectID '{}': {}", id_str, e))?;
+        Ok(Some(id))
+    }
+}
+
+/// Build a NotarizationClientReadOnly, using auto-discovery when package_id is None.
+async fn build_read_client(
+    node_url: &str,
+    package_id: Option<ObjectID>,
+) -> Result<NotarizationClientReadOnly, String> {
+    let iota_client = IotaClientBuilder::default()
+        .build(node_url)
+        .await
+        .map_err(|e| format!("Failed to connect to IOTA node '{}': {}", node_url, e))?;
+
+    match package_id {
+        Some(pkg_id) => NotarizationClientReadOnly::new_with_pkg_id(iota_client, pkg_id)
+            .await
+            .map_err(|e| format!("Failed to create notarization client: {}", e)),
+        None => NotarizationClientReadOnly::new(iota_client)
+            .await
+            .map_err(|e| format!("Failed to create notarization client (auto-discovery): {}", e)),
+    }
+}
+
 /// Create a KeyPairSigner from an Ed25519 private key string.
 ///
 /// Accepts Bech32m (`iotaprivkey1...`) or Base64-encoded private keys.
@@ -289,17 +322,19 @@ pub fn create_notarization(
     if secret_key_str.is_empty() {
         return Ok((atoms::error(), "secret_key cannot be empty".to_string()));
     }
-    if pkg_id_str.is_empty() {
-        return Ok((atoms::error(), "notarize_pkg_id cannot be empty".to_string()));
-    }
     if state_data_str.is_empty() {
         return Ok((atoms::error(), "state_data cannot be empty".to_string()));
     }
 
+    let package_id = match parse_optional_object_id(pkg_id_str) {
+        Ok(id) => id,
+        Err(e) => return Ok((atoms::error(), e)),
+    };
+
     match rt.block_on(create_notarization_async(
         node_url_str,
         secret_key_str,
-        pkg_id_str,
+        package_id,
         state_data_str,
         description_str,
         true, // locked
@@ -358,17 +393,19 @@ pub fn create_dynamic_notarization(
     if secret_key_str.is_empty() {
         return Ok((atoms::error(), "secret_key cannot be empty".to_string()));
     }
-    if pkg_id_str.is_empty() {
-        return Ok((atoms::error(), "notarize_pkg_id cannot be empty".to_string()));
-    }
     if state_data_str.is_empty() {
         return Ok((atoms::error(), "state_data cannot be empty".to_string()));
     }
 
+    let package_id = match parse_optional_object_id(pkg_id_str) {
+        Ok(id) => id,
+        Err(e) => return Ok((atoms::error(), e)),
+    };
+
     match rt.block_on(create_notarization_async(
         node_url_str,
         secret_key_str,
-        pkg_id_str,
+        package_id,
         state_data_str,
         description_str,
         false, // dynamic
@@ -419,11 +456,13 @@ pub fn read_notarization(
     if object_id_str.is_empty() {
         return Ok((atoms::error(), "object_id cannot be empty".to_string()));
     }
-    if pkg_id_str.is_empty() {
-        return Ok((atoms::error(), "notarize_pkg_id cannot be empty".to_string()));
-    }
 
-    match rt.block_on(read_notarization_async(node_url_str, object_id_str, pkg_id_str)) {
+    let package_id = match parse_optional_object_id(pkg_id_str) {
+        Ok(id) => id,
+        Err(e) => return Ok((atoms::error(), e)),
+    };
+
+    match rt.block_on(read_notarization_async(node_url_str, object_id_str, package_id)) {
         Ok(json) => Ok((atoms::ok(), json)),
         Err(e) => Ok((atoms::error(), e)),
     }
@@ -482,9 +521,6 @@ pub fn update_notarization_state(
     if secret_key_str.is_empty() {
         return Ok((atoms::error(), "secret_key cannot be empty".to_string()));
     }
-    if pkg_id_str.is_empty() {
-        return Ok((atoms::error(), "notarize_pkg_id cannot be empty".to_string()));
-    }
     if object_id_str.is_empty() {
         return Ok((atoms::error(), "object_id cannot be empty".to_string()));
     }
@@ -492,10 +528,15 @@ pub fn update_notarization_state(
         return Ok((atoms::error(), "new_state_data cannot be empty".to_string()));
     }
 
+    let package_id = match parse_optional_object_id(pkg_id_str) {
+        Ok(id) => id,
+        Err(e) => return Ok((atoms::error(), e)),
+    };
+
     match rt.block_on(update_notarization_state_async(
         node_url_str,
         secret_key_str,
-        pkg_id_str,
+        package_id,
         object_id_str,
         new_state_str,
     )) {
@@ -550,17 +591,19 @@ pub fn destroy_notarization(
     if secret_key_str.is_empty() {
         return Ok((atoms::error(), "secret_key cannot be empty".to_string()));
     }
-    if pkg_id_str.is_empty() {
-        return Ok((atoms::error(), "notarize_pkg_id cannot be empty".to_string()));
-    }
     if object_id_str.is_empty() {
         return Ok((atoms::error(), "object_id cannot be empty".to_string()));
     }
 
+    let package_id = match parse_optional_object_id(pkg_id_str) {
+        Ok(id) => id,
+        Err(e) => return Ok((atoms::error(), e)),
+    };
+
     match rt.block_on(destroy_notarization_async(
         node_url_str,
         secret_key_str,
-        pkg_id_str,
+        package_id,
         object_id_str,
     )) {
         Ok(json) => Ok((atoms::ok(), json)),
@@ -576,29 +619,16 @@ pub fn destroy_notarization(
 async fn create_notarization_async(
     node_url: &str,
     secret_key: &str,
-    notarize_pkg_id: &str,
+    package_id: Option<ObjectID>,
     state_data: &str,
     description: &str,
     locked: bool,
 ) -> Result<String, String> {
-    // 1. Parse package ID
-    let package_id = notarize_pkg_id
-        .parse::<ObjectID>()
-        .map_err(|e| format!("Invalid notarize_pkg_id '{}': {}", notarize_pkg_id, e))?;
-
-    // 2. Create signer from Ed25519 key — uses KeyPairSigner from iota_interaction
+    // 1. Create signer from Ed25519 key — uses KeyPairSigner from iota_interaction
     let signer = create_keypair_signer(secret_key)?;
 
-    // 3. Connect to the IOTA node
-    let iota_client = IotaClientBuilder::default()
-        .build(node_url)
-        .await
-        .map_err(|e| format!("Failed to connect to IOTA node '{}': {}", node_url, e))?;
-
-    // 4. Create NotarizationClient
-    let read_client = NotarizationClientReadOnly::new_with_pkg_id(iota_client, package_id)
-        .await
-        .map_err(|e| format!("Failed to create notarization client: {}", e))?;
+    // 2. Create NotarizationClient (auto-discovers package ID when None)
+    let read_client = build_read_client(node_url, package_id).await?;
 
     let notarization_client = NotarizationClient::new(read_client, signer)
         .await
@@ -662,26 +692,15 @@ async fn create_notarization_async(
 async fn read_notarization_async(
     node_url: &str,
     object_id_str: &str,
-    notarize_pkg_id: &str,
+    package_id: Option<ObjectID>,
 ) -> Result<String, String> {
-    // 1. Parse IDs
-    let package_id = notarize_pkg_id
-        .parse::<ObjectID>()
-        .map_err(|e| format!("Invalid notarize_pkg_id '{}': {}", notarize_pkg_id, e))?;
+    // 1. Parse object ID
     let object_id = object_id_str
         .parse::<ObjectID>()
         .map_err(|e| format!("Invalid object_id '{}': {}", object_id_str, e))?;
 
-    // 2. Connect to the IOTA node
-    let iota_client = IotaClientBuilder::default()
-        .build(node_url)
-        .await
-        .map_err(|e| format!("Failed to connect to IOTA node '{}': {}", node_url, e))?;
-
-    // 3. Create read-only client
-    let read_client = NotarizationClientReadOnly::new_with_pkg_id(iota_client, package_id)
-        .await
-        .map_err(|e| format!("Failed to create notarization client: {}", e))?;
+    // 2. Create read-only client (auto-discovers package ID when None)
+    let read_client = build_read_client(node_url, package_id).await?;
 
     // 4. Fetch notarization data via individual read-only calls
     let state = read_client
@@ -742,14 +761,11 @@ async fn read_notarization_async(
 async fn update_notarization_state_async(
     node_url: &str,
     secret_key: &str,
-    notarize_pkg_id: &str,
+    package_id: Option<ObjectID>,
     object_id_str: &str,
     new_state_data: &str,
 ) -> Result<String, String> {
-    // 1. Parse IDs
-    let package_id = notarize_pkg_id
-        .parse::<ObjectID>()
-        .map_err(|e| format!("Invalid notarize_pkg_id '{}': {}", notarize_pkg_id, e))?;
+    // 1. Parse object ID
     let object_id = object_id_str
         .parse::<ObjectID>()
         .map_err(|e| format!("Invalid object_id '{}': {}", object_id_str, e))?;
@@ -757,15 +773,8 @@ async fn update_notarization_state_async(
     // 2. Create signer from Ed25519 key
     let signer = create_keypair_signer(secret_key)?;
 
-    // 3. Connect and create client
-    let iota_client = IotaClientBuilder::default()
-        .build(node_url)
-        .await
-        .map_err(|e| format!("Failed to connect to IOTA node '{}': {}", node_url, e))?;
-
-    let read_client = NotarizationClientReadOnly::new_with_pkg_id(iota_client, package_id)
-        .await
-        .map_err(|e| format!("Failed to create notarization client: {}", e))?;
+    // 3. Create client (auto-discovers package ID when None)
+    let read_client = build_read_client(node_url, package_id).await?;
 
     let notarization_client = NotarizationClient::new(read_client, signer)
         .await
@@ -797,13 +806,10 @@ async fn update_notarization_state_async(
 async fn destroy_notarization_async(
     node_url: &str,
     secret_key: &str,
-    notarize_pkg_id: &str,
+    package_id: Option<ObjectID>,
     object_id_str: &str,
 ) -> Result<String, String> {
-    // 1. Parse IDs
-    let package_id = notarize_pkg_id
-        .parse::<ObjectID>()
-        .map_err(|e| format!("Invalid notarize_pkg_id '{}': {}", notarize_pkg_id, e))?;
+    // 1. Parse object ID
     let object_id = object_id_str
         .parse::<ObjectID>()
         .map_err(|e| format!("Invalid object_id '{}': {}", object_id_str, e))?;
@@ -811,15 +817,8 @@ async fn destroy_notarization_async(
     // 2. Create signer from Ed25519 key
     let signer = create_keypair_signer(secret_key)?;
 
-    // 3. Connect and create client
-    let iota_client = IotaClientBuilder::default()
-        .build(node_url)
-        .await
-        .map_err(|e| format!("Failed to connect to IOTA node '{}': {}", node_url, e))?;
-
-    let read_client = NotarizationClientReadOnly::new_with_pkg_id(iota_client, package_id)
-        .await
-        .map_err(|e| format!("Failed to create notarization client: {}", e))?;
+    // 3. Create client (auto-discovers package ID when None)
+    let read_client = build_read_client(node_url, package_id).await?;
 
     let notarization_client = NotarizationClient::new(read_client, signer)
         .await

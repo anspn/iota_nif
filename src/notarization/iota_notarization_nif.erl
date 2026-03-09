@@ -124,6 +124,7 @@ is_valid_hex_string(Input) ->
 %%        or Base64 format. The key's address must hold gas coins.
 %% @param NodeUrl URL of the IOTA node (e.g., `<<"http://127.0.0.1:9000">>').
 %% @param NotarizePkgId ObjectID of the deployed notarization Move package.
+%%        Pass `<<>>' for auto-discovery on official networks (mainnet/testnet).
 %% @param StateData The data to notarize (e.g., a document hash as a string).
 %% @returns `{ok, JsonBinary}' on success. The JSON contains:
 %%          <ul>
@@ -153,7 +154,8 @@ create_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData) ->
 %%
 %% @param SecretKey Ed25519 private key (Bech32m or Base64).
 %% @param NodeUrl URL of the IOTA node.
-%% @param NotarizePkgId ObjectID of the deployed notarization Move package.
+%% @param NotarizePkgId ObjectID of the deployed notarization Move package,
+%%        or `<<>>' for auto-discovery on official networks.
 %% @param StateData The data to notarize.
 %% @param Description Immutable description label for the notarization.
 %% @returns `{ok, JsonBinary}' | `{error, Reason}'
@@ -176,7 +178,8 @@ create_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData, Description) -
 %%
 %% @param SecretKey Ed25519 private key (Bech32m or Base64).
 %% @param NodeUrl URL of the IOTA node.
-%% @param NotarizePkgId ObjectID of the deployed notarization Move package.
+%% @param NotarizePkgId ObjectID of the deployed notarization Move package,
+%%        or `<<>>' for auto-discovery on official networks.
 %% @param StateData The initial data to notarize.
 %% @returns `{ok, JsonBinary}' | `{error, Reason}'
 %% @see create_dynamic_notarization/5
@@ -194,7 +197,8 @@ create_dynamic_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData) ->
 %%
 %% @param SecretKey Ed25519 private key (Bech32m or Base64).
 %% @param NodeUrl URL of the IOTA node.
-%% @param NotarizePkgId ObjectID of the deployed notarization Move package.
+%% @param NotarizePkgId ObjectID of the deployed notarization Move package,
+%%        or `<<>>' for auto-discovery on official networks.
 %% @param StateData The initial data to notarize.
 %% @param Description Immutable description label.
 %% @returns `{ok, JsonBinary}' | `{error, Reason}'
@@ -215,7 +219,8 @@ create_dynamic_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData, Descri
 %%
 %% @param NodeUrl URL of the IOTA node.
 %% @param ObjectId The on-chain notarization object ID (hex string).
-%% @param NotarizePkgId ObjectID of the deployed notarization Move package.
+%% @param NotarizePkgId ObjectID of the deployed notarization Move package,
+%%        or `<<>>' for auto-discovery on official networks.
 %% @returns `{ok, JsonBinary}' on success. The JSON contains:
 %%          <ul>
 %%            <li>`object_id' - The notarization object ID</li>
@@ -244,7 +249,8 @@ read_notarization(NodeUrl, ObjectId, NotarizePkgId) ->
 %%
 %% @param SecretKey Ed25519 private key (Bech32m or Base64).
 %% @param NodeUrl URL of the IOTA node.
-%% @param NotarizePkgId ObjectID of the deployed notarization Move package.
+%% @param NotarizePkgId ObjectID of the deployed notarization Move package,
+%%        or `<<>>' for auto-discovery on official networks.
 %% @param ObjectId The on-chain notarization object ID to update.
 %% @param NewStateData The new state data string.
 %% @returns `{ok, JsonBinary}' on success. The JSON contains:
@@ -272,7 +278,8 @@ update_notarization_state(SecretKey, NodeUrl, NotarizePkgId, ObjectId, NewStateD
 %%
 %% @param SecretKey Ed25519 private key (Bech32m or Base64).
 %% @param NodeUrl URL of the IOTA node.
-%% @param NotarizePkgId ObjectID of the deployed notarization Move package.
+%% @param NotarizePkgId ObjectID of the deployed notarization Move package,
+%%        or `<<>>' for auto-discovery on official networks.
 %% @param ObjectId The on-chain notarization object ID to destroy.
 %% @returns `{ok, JsonBinary}' on success. The JSON contains:
 %%          <ul>

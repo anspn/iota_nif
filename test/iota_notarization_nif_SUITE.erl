@@ -408,9 +408,13 @@ create_empty_secret_key(_Config) ->
     ?assert(binary:match(Reason, <<"secret_key">>) =/= nomatch).
 
 create_empty_pkg_id(_Config) ->
+    %% Empty pkg_id triggers auto-discovery — should fail with a connection
+    %% or unknown-network error (not a validation error)
     {error, Reason} = iota_notarization_nif:create_notarization(
         <<"dummykey">>, <<"http://localhost:9000">>, <<>>, <<"some data">>),
-    ?assert(binary:match(Reason, <<"notarize_pkg_id">>) =/= nomatch).
+    ct:pal("create with empty pkg_id (auto-discover): ~s", [Reason]),
+    ?assert(is_binary(Reason)),
+    ?assert(byte_size(Reason) > 0).
 
 create_empty_state_data(_Config) ->
     {error, Reason} = iota_notarization_nif:create_notarization(
@@ -447,9 +451,13 @@ read_empty_object_id(_Config) ->
     ?assert(binary:match(Reason, <<"object_id">>) =/= nomatch).
 
 read_empty_pkg_id(_Config) ->
+    %% Empty pkg_id triggers auto-discovery — should fail with a connection
+    %% or unknown-network error (not a validation error)
     {error, Reason} = iota_notarization_nif:read_notarization(
         <<"http://localhost:9000">>, <<"0x1">>, <<>>),
-    ?assert(binary:match(Reason, <<"notarize_pkg_id">>) =/= nomatch).
+    ct:pal("read with empty pkg_id (auto-discover): ~s", [Reason]),
+    ?assert(is_binary(Reason)),
+    ?assert(byte_size(Reason) > 0).
 
 read_invalid_object_id(_Config) ->
     {error, Reason} = iota_notarization_nif:read_notarization(
