@@ -5,3 +5,4 @@
 /priv/*.dll
 *.beam
 erl_crash.dump
+.env

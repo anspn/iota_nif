@@ -105,15 +105,16 @@ init_per_group(mock_mainnet_operations, Config) ->
     {ok, _Pid} = iota_client_mock:start_link(),
     Config;
 init_per_group(ledger_integration, Config) ->
-    %% Skip if required env vars are not set (no local node available)
-    case {os:getenv("IOTA_SECRET_KEY"), os:getenv("IOTA_IDENTITY_PKG_ID")} of
-        {false, _} ->
+    %% Skip if IOTA_SECRET_KEY is not set (no credentials available)
+    case os:getenv("IOTA_SECRET_KEY") of
+        false ->
             {skip, "IOTA_SECRET_KEY not set — skipping integration tests"};
-        {_, false} ->
-            {skip, "IOTA_IDENTITY_PKG_ID not set — skipping integration tests"};
-        {KeyStr, PkgIdStr} ->
+        KeyStr ->
             SecretKey = list_to_binary(KeyStr),
-            IdentityPkgId = list_to_binary(PkgIdStr),
+            IdentityPkgId = case os:getenv("IOTA_IDENTITY_PKG_ID") of
+                false -> <<>>;  %% auto-discover on official networks
+                P -> list_to_binary(P)
+            end,
             GasCoinId = case os:getenv("IOTA_GAS_COIN_ID") of
                 false -> <<>>;
                 G -> list_to_binary(G)

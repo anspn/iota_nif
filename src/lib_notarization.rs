@@ -242,25 +242,15 @@ fn create_keypair_signer(secret_key: &str) -> Result<KeyPairSigner, String> {
         ));
     }
 
-    // Convert to ed25519_dalek types to derive the public key
-    let key_bytes: [u8; 32] = raw_key_bytes.try_into().unwrap();
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
-    let verifying_key = signing_key.verifying_key();
-
-    // Build a 64-byte keypair (secret + public) for IotaKeyPair construction
-    let mut keypair_bytes = Vec::with_capacity(64);
-    keypair_bytes.extend_from_slice(&key_bytes);
-    keypair_bytes.extend_from_slice(verifying_key.as_bytes());
-
-    // Construct IotaKeyPair::Ed25519 via base64 decoding
-    // Format: flag byte (0x00 = Ed25519) + secret key (32) + public key (32) = 65 bytes
-    let mut flagged_bytes = Vec::with_capacity(65);
+    // Build flag(1) + private_key(32) = 33 bytes.
+    // Ed25519KeyPair::from_bytes expects only the 32-byte private key
+    // (the public key is derived internally). The flag byte (0x00) identifies
+    // the Ed25519 scheme.
+    let mut flagged_bytes = Vec::with_capacity(33);
     flagged_bytes.push(0x00); // Ed25519 flag
-    flagged_bytes.extend_from_slice(&keypair_bytes);
+    flagged_bytes.extend_from_slice(&raw_key_bytes);
 
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&flagged_bytes);
-    let keypair = iota_sdk_v15::types::crypto::IotaKeyPair::decode(&b64)
+    let keypair = iota_sdk_v15::types::crypto::IotaKeyPair::from_bytes(&flagged_bytes)
         .map_err(|e| format!("Failed to create IotaKeyPair: {:?}", e))?;
 
     Ok(KeyPairSigner::new(keypair))
@@ -674,7 +664,7 @@ async fn create_notarization_async(
     let on_chain_notarization = result.output;
 
     // Extract the object ID from the OnChainNotarization
-    let notarization_id = format!("{:?}", on_chain_notarization.id);
+    let notarization_id = on_chain_notarization.id.object_id().to_string();
 
     let result_json = serde_json::json!({
         "object_id": notarization_id,

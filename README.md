@@ -29,7 +29,32 @@ cd iota_nif
 rebar3 compile
 ```
 
-### 2. Set up IOTA CLI (for ledger operations)
+### 2. Configure environment
+
+```bash
+# Copy the example env file
+cp .env.example .env
+
+# Export your Ed25519 private key from the IOTA CLI
+iota keytool export --key-identity $(iota client active-address)
+
+# Edit .env and paste your key
+nano .env
+```
+
+The `.env` file supports these variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `IOTA_SECRET_KEY` | Yes | Ed25519 private key (Bech32 `iotaprivkey1...` or Base64) |
+| `IOTA_NODE_URL` | No | IOTA node URL (default: `http://127.0.0.1:9000`) |
+| `IOTA_IDENTITY_PKG_ID` | No | Identity package ObjectID (empty = auto-discover) |
+| `IOTA_NOTARIZE_PKG_ID` | No | Notarization package ObjectID (empty = auto-discover) |
+
+> **Note:** The `.env` file is gitignored. The library itself never reads environment
+> variables — they are used only by the test suites and by your consuming application.
+
+### 3. Set up IOTA CLI (for ledger operations)
 
 ```bash
 # Request gas coins from the faucet (local node or testnet)
@@ -38,15 +63,9 @@ iota client faucet
 # Check your address and gas coins
 iota client active-address
 iota client gas
-
-# Export your Ed25519 private key
-iota keytool export <your-address>
-
-# Find the identity package ID for your network
-# (check your network's documentation or deploy the iota_identity Move package)
 ```
 
-### 3. Publish a DID
+### 4. Publish a DID
 
 ```erlang
 SecretKey = <<"iotaprivkey1qz...">>,       %% from `iota keytool export`
@@ -300,6 +319,7 @@ DataHash = iota_notarization_nif:hash_data(<<"Legal contract content...">>),
 
 ```
 iota_nif/
+├── .env.example              # Environment variables template (copy to .env)
 ├── rebar.config              # rebar3 configuration with Rust build hooks
 ├── Cargo.toml                # Rust dependencies
 ├── include/
@@ -351,26 +371,10 @@ rebar3 ct
 # Run only specific suite
 rebar3 ct --suite=iota_did_nif_SUITE
 
-# Run DID integration tests against a local IOTA node
-# Required environment variables:
-#   IOTA_SECRET_KEY   - Ed25519 private key (Bech32 or Base64)
-#   IOTA_IDENTITY_PKG_ID   - ObjectID of the iota_identity Move package
-# Optional:
-#   IOTA_GAS_COIN_ID  - Specific gas coin ObjectID (auto-selected if omitted)
-#   IOTA_NODE_URL     - Node URL (defaults to http://127.0.0.1:9000)
-IOTA_SECRET_KEY="iotaprivkey1qz..." \
-IOTA_IDENTITY_PKG_ID="0x..." \
-rebar3 ct --suite=iota_did_nif_SUITE --group=ledger_integration
-
-# Run notarization ledger integration tests
-# Required environment variables:
-#   IOTA_NODE_URL          - IOTA node URL
-#   IOTA_SECRET_KEY        - Ed25519 private key
-#   IOTA_NOTARIZE_PKG_ID   - ObjectID of the deployed notarize Move package
-IOTA_NODE_URL="http://127.0.0.1:9000" \
-IOTA_SECRET_KEY="iotaprivkey1qz..." \
-IOTA_NOTARIZE_PKG_ID="0x..." \
-rebar3 ct --suite=iota_notarization_nif_SUITE --group=ledger_integration
+# Run ledger integration tests using .env variables
+# (requires a funded IOTA_SECRET_KEY in .env — see .env.example)
+export $(grep -v '^#' .env | xargs) && rebar3 ct --suite=iota_did_nif_SUITE --group=ledger_integration
+export $(grep -v '^#' .env | xargs) && rebar3 ct --suite=iota_notarization_nif_SUITE --group=ledger_integration
 ```
 
 ## License
