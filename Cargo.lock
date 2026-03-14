@@ -4845,6 +4845,7 @@ dependencies = [
  "bech32 0.11.1",
  "ed25519-dalek",
  "hex",
+ "identity_eddsa_verifier",
  "identity_iota",
  "iota-sdk 1.13.1",
  "iota-sdk 1.15.0",

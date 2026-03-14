@@ -7,6 +7,8 @@ A Rust NIF (Native Implemented Function) library that provides IOTA DID (Decentr
 - **Local DID operations**: Generate DID documents, extract DIDs, create DID URLs, validate DIDs
 - **Ledger publishing**: Publish DID documents on-chain via IOTA Rebased MoveVM transactions
 - **DID resolution**: Resolve published DIDs from the IOTA ledger
+- **Verifiable Credentials (VC)**: Create and verify W3C Verifiable Credentials as signed JWTs
+- **Verifiable Presentations (VP)**: Create and verify W3C Verifiable Presentations with challenge/expiry support
 - **Notarization**: Hash and notarize data payloads (local and on-chain)
 - **On-chain notarization**: Create, read, update, and destroy notarizations on the IOTA Rebased ledger via the [official IOTA notarization library](https://github.com/iotaledger/notarization)
 - **Key format support**: Accepts Ed25519 keys in Bech32 (`iotaprivkey1...`), Base64 (33-byte keystore), or raw Base64 (32-byte) formats
@@ -63,6 +65,12 @@ iota client faucet
 # Check your address and gas coins
 iota client active-address
 iota client gas
+
+# Export your Ed25519 private key
+iota keytool export <your-address>
+
+# Find the identity package ID for your network
+# (check your network's documentation or deploy the iota_identity Move package)
 ```
 
 ### 4. Publish a DID
@@ -186,6 +194,88 @@ node_url = "http://127.0.0.1:9000"
 pkg_id = "0xabc123..."
 {:ok, result_json} = :iota_did_nif.create_and_publish_did(secret_key, node_url, pkg_id)
 result = Jason.decode!(result_json)
+
+# Create a Verifiable Credential
+issuer_doc = result["document"]
+holder_did = "did:iota:0x..."
+claims = Jason.encode!(%{"name" => "Alice", "degree" => %{"type" => "BachelorDegree"}})
+{:ok, cred_json} = :iota_credential_nif.create_credential(issuer_doc, holder_did, "DegreeCredential", claims)
+cred = Jason.decode!(cred_json)
+credential_jwt = cred["credential_jwt"]
+
+# Create a Verifiable Presentation
+holder_doc = "..."  # holder's DID document JSON
+cred_jwts = Jason.encode!([credential_jwt])
+{:ok, pres_json} = :iota_credential_nif.create_presentation(holder_doc, cred_jwts, "challenge-nonce")
+```
+
+### Verifiable Credentials (VC)
+
+Verifiable Credentials allow an issuer to make tamper-evident claims about a subject (holder).
+The credential is signed as a JWT using the issuer's DID document.
+
+```erlang
+%% 1. Generate DIDs for issuer and holder
+{ok, IssuerJson} = iota_did_nif:generate_did(<<"iota">>),
+IssuerResult = json:decode(IssuerJson),
+IssuerDocJson = maps:get(<<"document">>, IssuerResult),
+
+{ok, HolderJson} = iota_did_nif:generate_did(<<"iota">>),
+HolderResult = json:decode(HolderJson),
+HolderDid = maps:get(<<"did">>, HolderResult),
+
+%% 2. Create a Verifiable Credential
+Claims = <<"{\"name\": \"Alice\", \"degree\": {\"type\": \"BachelorDegree\", \"name\": \"BSc Computer Science\"}, \"GPA\": \"4.0\"}">>,
+
+{ok, CredResultJson} = iota_credential_nif:create_credential(
+    IssuerDocJson,
+    HolderDid,
+    <<"UniversityDegreeCredential">>,
+    Claims
+),
+
+CredResult = json:decode(CredResultJson),
+CredentialJwt = maps:get(<<"credential_jwt">>, CredResult).
+%% CredentialJwt is a compact JWT string: eyJhbGciOi...
+
+%% 3. Verify the credential
+{ok, VerifyJson} = iota_credential_nif:verify_credential(CredentialJwt, IssuerDocJson),
+VerifyResult = json:decode(VerifyJson).
+%% VerifyResult contains: valid, issuer_did, subject_did, claims
+```
+
+### Verifiable Presentations (VP)
+
+Verifiable Presentations allow a holder to wrap one or more VCs and prove control
+by signing the presentation. A challenge (nonce) prevents replay attacks.
+
+```erlang
+%% Using holder DID document and credential JWT from above
+
+%% 1. Wrap credentials into a JSON array
+HolderDocJson = maps:get(<<"document">>, HolderResult),
+CredJwtsJson = iolist_to_binary(json:encode([CredentialJwt])),
+
+%% 2. Create a presentation with challenge and 10-minute expiry
+Challenge = <<"unique-challenge-nonce-12345">>,
+{ok, PresResultJson} = iota_credential_nif:create_presentation(
+    HolderDocJson,
+    CredJwtsJson,
+    Challenge,
+    600  %% expires in 600 seconds
+),
+
+PresResult = json:decode(PresResultJson),
+PresentationJwt = maps:get(<<"presentation_jwt">>, PresResult).
+
+%% 3. Verify the presentation (verifier side)
+IssuerDocsJson = iolist_to_binary(json:encode([json:decode(IssuerDocJson)])),
+{ok, VpVerifyJson} = iota_credential_nif:verify_presentation(
+    PresentationJwt,
+    HolderDocJson,
+    IssuerDocsJson,
+    Challenge
+).
 ```
 
 ### Notarization — Local Operations
@@ -275,45 +365,458 @@ DataHash = iota_notarization_nif:hash_data(<<"Legal contract content...">>),
 
 ## API Reference
 
-### DID Operations (local, no network)
+All functions are organized in three Erlang modules. Every parameter is a binary.
+Return values follow the `{ok, Result}` / `{error, Reason}` convention (unless noted).
 
-| Function | Description |
-|----------|-------------|
-| `generate_did()` | Generate DID with default network |
-| `generate_did(Network)` | Generate DID for specific network |
-| `extract_did_from_document(DocJson)` | Extract DID from JSON document |
-| `create_did_url(Did, Fragment)` | Create DID URL with fragment |
-| `is_valid_iota_did(Did)` | Validate DID format |
+---
 
-### Ledger Operations (require IOTA node)
+### `iota_did_nif` — DID Operations
 
-| Function | Description |
-|----------|-------------|
-| `create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId)` | Publish DID (auto gas coin) |
-| `create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId, GasCoinId)` | Publish DID with specific gas coin |
-| `resolve_did(Did, NodeUrl)` | Resolve a published DID |
-| `resolve_did(Did, NodeUrl, IdentityPkgId)` | Resolve with explicit package ID |
+#### Local Operations (no network required)
 
-### Notarization Operations (local, no network)
+##### `generate_did() -> {ok, binary()} | {error, binary()}`
 
-| Function | Description |
-|----------|-------------|
-| `hash_data(Data)` | SHA-256 hash, returns hex string |
-| `create_notarization_payload(DataHash, Tag)` | Create timestamped notarization payload |
-| `verify_notarization_payload(PayloadHex)` | Verify and extract payload data |
-| `is_valid_hex_string(Input)` | Validate hex format |
+Generate a new IOTA DID for the mainnet (default). Equivalent to `generate_did(<<"iota">>)`.
 
-### Notarization Ledger Operations (require IOTA node + notarization package)
+The generated DID has a placeholder tag (`0x0000...`) because it has not been published. Use `create_and_publish_did` around a key to get a real on-chain DID.
 
-| Function | Description |
-|----------|-------------|
-| `create_notarization(SecretKey, NodeUrl, PkgId, StateData)` | Create locked notarization (auto gas) |
-| `create_notarization(SecretKey, NodeUrl, PkgId, StateData, Description)` | Create locked with description |
-| `create_dynamic_notarization(SecretKey, NodeUrl, PkgId, StateData)` | Create dynamic notarization |
-| `create_dynamic_notarization(SecretKey, NodeUrl, PkgId, StateData, Description)` | Create dynamic with description |
-| `read_notarization(NodeUrl, ObjectId, PkgId)` | Read notarization from ledger |
-| `update_notarization_state(SecretKey, NodeUrl, PkgId, ObjectId, NewStateData)` | Update dynamic notarization state |
-| `destroy_notarization(SecretKey, NodeUrl, PkgId, ObjectId)` | Destroy a notarization |
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `did` | string | The DID string (placeholder with zero tag) |
+| `document` | string | Full DID document as JSON |
+| `verification_method_fragment` | string | Fragment ID of the generated Ed25519 key |
+
+---
+
+##### `generate_did(Network) -> {ok, binary()} | {error, binary()}`
+
+Generate a new IOTA DID for the specified network.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `Network` | binary | `<<"iota">>` (mainnet), `<<"smr">>` (Shimmer), `<<"rms">>` (Shimmer testnet), `<<"atoi">>` (IOTA testnet) |
+
+**Returns** — same JSON as `generate_did/0`.
+
+---
+
+##### `extract_did_from_document(DocumentJson) -> {ok, binary()} | {error, binary()}`
+
+Extract the DID string from a DID document JSON.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `DocumentJson` | binary | A DID document as a JSON binary |
+
+**Returns** — the `id` field value from the document.
+
+---
+
+##### `create_did_url(Did, Fragment) -> {ok, binary()} | {error, binary()}`
+
+Create a DID URL by appending a fragment with `#`.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `Did` | binary | The base DID string (e.g., `<<"did:iota:0x123">>`) |
+| `Fragment` | binary | The fragment identifier (e.g., `<<"key-1">>`) |
+
+**Returns** — e.g., `<<"did:iota:0x123#key-1">>`.
+
+---
+
+##### `is_valid_iota_did(Did) -> boolean()`
+
+Check if a string is a valid IOTA DID format. Does **not** check on-chain existence.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `Did` | binary | The DID string to validate |
+
+**Returns** — `true` if format is valid (`did:iota:0x...` or `did:iota:<network>:0x...`), `false` otherwise.
+
+---
+
+#### Ledger Operations (require IOTA Rebased node)
+
+##### `create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId) -> {ok, binary()} | {error, binary()}`
+
+Create and publish a new DID to the IOTA Rebased ledger with automatic gas coin selection.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key (Bech32, Base64 33-byte, or Base64 32-byte) |
+| `NodeUrl` | binary | URL of the IOTA node (e.g., `<<"http://127.0.0.1:9000">>`) |
+| `IdentityPkgId` | binary | ObjectID of the identity Move package, or `<<>>` for auto-discovery |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `did` | string | The published DID string (real on-chain tag) |
+| `document` | string | Full DID document as JSON |
+| `verification_method_fragment` | string | Fragment ID of the generated key |
+| `network` | string | Network name |
+| `sender_address` | string | Address that published the DID |
+
+---
+
+##### `create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId, GasCoinId) -> {ok, binary()} | {error, binary()}`
+
+Same as above but with explicit gas coin selection.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key |
+| `NodeUrl` | binary | IOTA node URL |
+| `IdentityPkgId` | binary | Identity package ObjectID, or `<<>>` |
+| `GasCoinId` | binary | Hex ObjectID of gas coin, or `<<>>` for automatic selection |
+
+---
+
+##### `resolve_did(Did, NodeUrl) -> {ok, binary()} | {error, binary()}`
+
+Resolve a published DID from the IOTA ledger. No signing key required.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `Did` | binary | The DID to resolve (e.g., `<<"did:iota:0xabc...">>`) |
+| `NodeUrl` | binary | IOTA node URL |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `did` | string | The resolved DID |
+| `document` | string | Full DID document as JSON |
+
+---
+
+##### `resolve_did(Did, NodeUrl, IdentityPkgId) -> {ok, binary()} | {error, binary()}`
+
+Same as above with explicit identity package ID.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `Did` | binary | The DID to resolve |
+| `NodeUrl` | binary | IOTA node URL |
+| `IdentityPkgId` | binary | Identity package ObjectID, or `<<>>` |
+
+---
+
+##### `deactivate_did(SecretKey, Did, NodeUrl) -> {ok, binary()} | {error, binary()}`
+
+Permanently deactivate (revoke) a DID on the ledger. **Irreversible**.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key of a controller |
+| `Did` | binary | The DID to deactivate |
+| `NodeUrl` | binary | IOTA node URL |
+
+**Returns** — `{ok, <<"deactivated">>}` on success.
+
+---
+
+##### `deactivate_did(SecretKey, Did, NodeUrl, IdentityPkgId) -> {ok, binary()} | {error, binary()}`
+
+Same as above with explicit identity package ID.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key of a controller |
+| `Did` | binary | The DID to deactivate |
+| `NodeUrl` | binary | IOTA node URL |
+| `IdentityPkgId` | binary | Identity package ObjectID, or `<<>>` |
+
+---
+
+### `iota_credential_nif` — Verifiable Credentials & Presentations
+
+#### Verifiable Credentials
+
+##### `create_credential(IssuerDocJson, SubjectDid, CredentialType, ClaimsJson) -> {ok, binary()} | {error, binary()}`
+
+Create a Verifiable Credential (VC) as a signed JWT. The issuer signs the credential
+using a freshly generated Ed25519 verification method.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `IssuerDocJson` | binary | The issuer's DID document as JSON (from `generate_did`) |
+| `SubjectDid` | binary | The subject/holder's DID string |
+| `CredentialType` | binary | Credential type (e.g., `<<"UniversityDegreeCredential">>`) |
+| `ClaimsJson` | binary | JSON object with credential claims. The `"id"` field is auto-set to `SubjectDid`. |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `credential_jwt` | string | The signed credential as a compact JWT (`header.payload.signature`) |
+| `issuer_did` | string | The issuer's DID |
+| `subject_did` | string | The subject/holder's DID |
+| `credential_type` | string | The credential type |
+
+**Example claims JSON:**
+
+```json
+{
+  "name": "Alice",
+  "degree": {
+    "type": "BachelorDegree",
+    "name": "Bachelor of Science and Arts"
+  },
+  "GPA": "4.0"
+}
+```
+
+---
+
+##### `verify_credential(CredentialJwt, IssuerDocJson) -> {ok, binary()} | {error, binary()}`
+
+Verify a Verifiable Credential JWT. Validates the EdDSA signature, semantic structure,
+issuance date (not in the future), and expiration date (not in the past).
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `CredentialJwt` | binary | The credential JWT string |
+| `IssuerDocJson` | binary | The issuer's DID document as JSON (must contain the signing key) |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `valid` | boolean | `true` if validation passed |
+| `issuer_did` | string | The issuer's DID extracted from the credential |
+| `subject_did` | string | The subject/holder's DID |
+| `claims` | string | The credential claims as a JSON string |
+
+---
+
+#### Verifiable Presentations
+
+##### `create_presentation(HolderDocJson, CredentialJwtsJson, Challenge) -> {ok, binary()} | {error, binary()}`
+
+Create a Verifiable Presentation (VP) as a signed JWT with no expiration.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `HolderDocJson` | binary | The holder's DID document as JSON |
+| `CredentialJwtsJson` | binary | JSON array of credential JWT strings (e.g., `<<"[\"eyJ...\"]">>`) |
+| `Challenge` | binary | Nonce for replay protection. Pass `<<>>` to omit. |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `presentation_jwt` | string | The signed presentation as a compact JWT |
+| `holder_did` | string | The holder's DID |
+
+---
+
+##### `create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, ExpiresInSeconds) -> {ok, binary()} | {error, binary()}`
+
+Create a Verifiable Presentation with expiration.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `HolderDocJson` | binary | The holder's DID document as JSON |
+| `CredentialJwtsJson` | binary | JSON array of credential JWT strings |
+| `Challenge` | binary | Nonce for replay protection. Pass `<<>>` to omit. |
+| `ExpiresInSeconds` | integer | Expiration in seconds from now. `0` = no expiration. |
+
+---
+
+##### `verify_presentation(PresentationJwt, HolderDocJson, IssuerDocsJson) -> {ok, binary()} | {error, binary()}`
+
+Verify a Verifiable Presentation JWT and all contained credential JWTs.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `PresentationJwt` | binary | The presentation JWT string |
+| `HolderDocJson` | binary | The holder's DID document as JSON |
+| `IssuerDocsJson` | binary | JSON array of issuer DID documents (one per credential, in order) |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `valid` | boolean | `true` if validation passed |
+| `holder_did` | string | The holder's DID |
+| `credential_count` | integer | Number of credentials in the presentation |
+| `credentials` | array | Array of credential JWT strings |
+
+---
+
+##### `verify_presentation(PresentationJwt, HolderDocJson, IssuerDocsJson, Challenge) -> {ok, binary()} | {error, binary()}`
+
+Verify a Verifiable Presentation with challenge (nonce) verification for replay protection.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `PresentationJwt` | binary | The presentation JWT string |
+| `HolderDocJson` | binary | The holder's DID document as JSON |
+| `IssuerDocsJson` | binary | JSON array of issuer DID documents |
+| `Challenge` | binary | The expected challenge/nonce. Pass `<<>>` to skip challenge check. |
+
+---
+
+### `iota_notarization_nif` — Notarization Operations
+
+#### Local Operations (no network required)
+
+##### `hash_data(Data) -> binary()`
+
+Compute the SHA-256 hash of the input data.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `Data` | binary | The data to hash |
+
+**Returns** — 64-character lowercase hex string (e.g., `<<"a1b2c3d4...">>`).
+
+---
+
+##### `create_notarization_payload(DataHash, Tag) -> {ok, binary()} | {error, binary()}`
+
+Create a hex-encoded notarization payload with a timestamp.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `DataHash` | binary | SHA-256 hex hash of the data |
+| `Tag` | binary | A tag/label for the notarization |
+
+**Returns** — hex-encoded payload string in format `tag:hash:timestamp`.
+
+---
+
+##### `verify_notarization_payload(PayloadHex) -> {ok, binary()} | {error, binary()}`
+
+Verify and decode a hex-encoded notarization payload.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `PayloadHex` | binary | The hex-encoded payload to verify |
+
+**Returns** JSON with the extracted tag, hash, and timestamp.
+
+---
+
+##### `is_valid_hex_string(Input) -> boolean()`
+
+Check if a string is a valid hexadecimal string.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `Input` | binary | The string to validate |
+
+**Returns** — `true` if the string contains only valid hex characters, `false` otherwise.
+
+---
+
+#### Ledger Operations (require IOTA node + notarization package)
+
+##### `create_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData) -> {ok, binary()} | {error, binary()}`
+
+Create a locked (immutable) notarization on-chain. Ideal for proof-of-existence.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key |
+| `NodeUrl` | binary | IOTA node URL |
+| `NotarizePkgId` | binary | Notarization package ObjectID |
+| `StateData` | binary | The data to notarize |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `object_id` | string | On-chain notarization object ID |
+| `tx_digest` | string | Transaction digest |
+| `state_data` | string | The notarized data |
+| `description` | string | Description label |
+| `method` | string | `"locked"` |
+
+---
+
+##### `create_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData, Description) -> {ok, binary()} | {error, binary()}`
+
+Same as above with a description label.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key |
+| `NodeUrl` | binary | IOTA node URL |
+| `NotarizePkgId` | binary | Notarization package ObjectID |
+| `StateData` | binary | The data to notarize |
+| `Description` | binary | A human-readable description label |
+
+---
+
+##### `create_dynamic_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData) -> {ok, binary()} | {error, binary()}`
+
+Create a dynamic (updatable) notarization on-chain.
+
+Parameters and return value are the same as `create_notarization/4`, except `method` is `"dynamic"`.
+
+---
+
+##### `create_dynamic_notarization(SecretKey, NodeUrl, NotarizePkgId, StateData, Description) -> {ok, binary()} | {error, binary()}`
+
+Same as above with a description label.
+
+---
+
+##### `read_notarization(NodeUrl, ObjectId, NotarizePkgId) -> {ok, binary()} | {error, binary()}`
+
+Read a notarization from the ledger by object ID. Read-only, no key required.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `NodeUrl` | binary | IOTA node URL |
+| `ObjectId` | binary | The on-chain notarization object ID |
+| `NotarizePkgId` | binary | Notarization package ObjectID |
+
+**Returns** JSON with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `object_id` | string | The notarization object ID |
+| `state_data` | string | The notarized data |
+| `state_metadata` | string | Optional metadata |
+| `description` | string | Description label |
+| `method` | string | `"Locked"` or `"Dynamic"` |
+| `created_at` | string | Creation timestamp |
+| `last_state_change_at` | string | Last state change timestamp |
+| `state_version_count` | integer | Number of state updates |
+
+---
+
+##### `update_notarization_state(SecretKey, NodeUrl, NotarizePkgId, ObjectId, NewStateData) -> {ok, binary()} | {error, binary()}`
+
+Update the state of a dynamic notarization. Only works on dynamic (non-locked) notarizations.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key |
+| `NodeUrl` | binary | IOTA node URL |
+| `NotarizePkgId` | binary | Notarization package ObjectID |
+| `ObjectId` | binary | The on-chain notarization object ID |
+| `NewStateData` | binary | The new state data |
+
+---
+
+##### `destroy_notarization(SecretKey, NodeUrl, NotarizePkgId, ObjectId) -> {ok, binary()} | {error, binary()}`
+
+Destroy a notarization from the ledger.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `SecretKey` | binary | Ed25519 private key |
+| `NodeUrl` | binary | IOTA node URL |
+| `NotarizePkgId` | binary | Notarization package ObjectID |
+| `ObjectId` | binary | The on-chain notarization object ID |
 
 ## Project Structure
 
@@ -329,16 +832,21 @@ iota_nif/
 │   ├── iota_nif.erl          # NIF loader (private)
 │   ├── lib.rs                # Rust NIF entry point
 │   ├── lib_did.rs            # Local DID operations (Rust)
-│   ├── lib_ledger.rs         # Ledger publish/resolve (Rust)
+│   ├── lib_ledger.rs         # Ledger publish/resolve/deactivate (Rust)
+│   ├── lib_credential.rs     # Verifiable Credentials & Presentations (Rust)
 │   ├── lib_notarization.rs   # Notarization local + ledger (Rust, uses official library)
 │   ├── identity/
 │   │   └── iota_did_nif.erl  # Public Erlang API for DID operations
+│   ├── credential/
+│   │   └── iota_credential_nif.erl  # Public Erlang API for VC/VP operations
 │   └── notarization/
 │       └── iota_notarization_nif.erl  # Public Erlang API for notarization
 ├── test/
 │   ├── iota_did_nif_SUITE.erl
+│   ├── iota_credential_nif_SUITE.erl
 │   ├── iota_notarization_nif_SUITE.erl
-│   └── nif_resilience_SUITE.erl
+│   ├── nif_resilience_SUITE.erl
+│   └── iota_client_mock.erl
 └── priv/
     └── libiota_nif.so         # Compiled NIF (after build)
 ```
@@ -350,26 +858,40 @@ iota_nif/
 │  Erlang/Elixir  │────▶│   Rust NIF       │────▶│  IOTA Identity   │
 │     Process     │     │   (rustler)      │     │  SDK v1.8.0-β2   │
 └─────────────────┘     └──────────────────┘     └──────────────────┘
-                                │                        │
-                                │                        ▼
-                                │                 ┌──────────────────┐
-                                │                 │  IOTA Rebased    │
-                                │                 │  Node (MoveVM)   │
-                                ▼                 └──────────────────┘
-                         ┌──────────────────┐            ▲
-                         │  IOTA Notarize   │────────────┘
-                         │  Library v0.1    │
-                         └──────────────────┘
+        │                       │                        │
+        │                       │                        ▼
+        │                       │                 ┌──────────────────┐
+        │                       │                 │  IOTA Rebased    │
+        │                       │                 │  Node (MoveVM)   │
+        │                       ▼                 └──────────────────┘
+        │                ┌──────────────────┐            ▲
+        │                │  IOTA Notarize   │────────────┘
+        │                │  Library v0.1    │
+        │                └──────────────────┘
+        │
+        │  Erlang Modules:
+        │  ├── iota_did_nif        → DID create/publish/resolve/deactivate
+        │  ├── iota_credential_nif → VC create/verify, VP create/verify
+        │  └── iota_notarization_nif → Notarize/hash/verify
+        │
+        │  Rust Modules:
+        │  ├── lib_did             → Local DID generation
+        │  ├── lib_ledger          → On-chain DID operations
+        │  ├── lib_credential      → VC/VP signing & validation
+        │  └── lib_notarization    → Notarization (local + on-chain)
 ```
 
 ## Running Tests
 
 ```bash
-# Run all tests (local operations, mock, error handling)
+# Run all tests (local operations, mock, error handling, VC/VP)
 rebar3 ct
 
-# Run only specific suite
+# Run only specific suites
 rebar3 ct --suite=iota_did_nif_SUITE
+rebar3 ct --suite=iota_credential_nif_SUITE
+rebar3 ct --suite=iota_notarization_nif_SUITE
+rebar3 ct --suite=nif_resilience_SUITE
 
 # Run ledger integration tests using .env variables
 # (requires a funded IOTA_SECRET_KEY in .env — see .env.example)

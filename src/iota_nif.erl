@@ -32,7 +32,12 @@
     create_dynamic_notarization/5,
     read_notarization/3,
     update_notarization_state/5,
-    destroy_notarization/4
+    destroy_notarization/4,
+    %% Verifiable Credential / Presentation NIFs
+    create_credential/4,
+    verify_credential/2,
+    create_presentation/4,
+    verify_presentation/4
 ]).
 
 %% NIF loading
@@ -166,4 +171,36 @@ update_notarization_state(_NodeUrl, _SecretKey, _NotarizePkgId, _ObjectId, _NewS
 -spec destroy_notarization(binary(), binary(), binary(), binary()) ->
     {ok, binary()} | {error, binary()}.
 destroy_notarization(_NodeUrl, _SecretKey, _NotarizePkgId, _ObjectId) ->
+    erlang:nif_error(nif_not_loaded).
+
+%%%===================================================================
+%%% Verifiable Credential / Presentation NIFs
+%%%===================================================================
+
+%% @private
+%% @doc Create a Verifiable Credential as a signed JWT.
+-spec create_credential(binary(), binary(), binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+create_credential(_IssuerDocJson, _SubjectDid, _CredentialType, _ClaimsJson) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Verify a Verifiable Credential JWT.
+-spec verify_credential(binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+verify_credential(_CredentialJwt, _IssuerDocJson) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Create a Verifiable Presentation as a signed JWT.
+-spec create_presentation(binary(), binary(), binary(), non_neg_integer()) ->
+    {ok, binary()} | {error, binary()}.
+create_presentation(_HolderDocJson, _CredentialJwtsJson, _Challenge, _ExpiresInSeconds) ->
+    erlang:nif_error(nif_not_loaded).
+
+%% @private
+%% @doc Verify a Verifiable Presentation JWT.
+-spec verify_presentation(binary(), binary(), binary(), binary()) ->
+    {ok, binary()} | {error, binary()}.
+verify_presentation(_PresentationJwt, _HolderDocJson, _IssuerDocsJson, _Challenge) ->
     erlang:nif_error(nif_not_loaded).
