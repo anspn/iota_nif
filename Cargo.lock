@@ -4852,6 +4852,7 @@ dependencies = [
  "iota_interaction 0.8.10",
  "notarization",
  "product_common 0.8.8",
+ "rand 0.8.5",
  "rustler",
  "serde",
  "serde_json",

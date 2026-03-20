@@ -37,11 +37,11 @@
 %% API exports
 -export([
     %% Verifiable Credentials
-    create_credential/4,
+    create_credential/6,
     verify_credential/2,
     %% Verifiable Presentations
-    create_presentation/3,
-    create_presentation/4,
+    create_presentation/5,
+    create_presentation/6,
     verify_presentation/3,
     verify_presentation/4
 ]).
@@ -52,13 +52,13 @@
 
 %% @doc Create a Verifiable Credential (VC) as a signed JWT.
 %%
-%% The issuer creates and signs a credential about a subject (holder).
-%% A new Ed25519 verification method is generated in the issuer's DID
-%% document for signing the JWT.
+%% The issuer creates and signs a credential about a subject (holder)
+%% using a caller-supplied private key that corresponds to an existing
+%% verification method in the issuer's DID document.
 %%
 %% @param IssuerDocJson The issuer's DID document as a JSON binary.
 %%        This should be a full DID document, e.g., from
-%%        `iota_did_nif:generate_did/0,1'.
+%%        `iota_did_nif:create_and_publish_did/4'.
 %% @param SubjectDid The DID of the credential subject (holder)
 %%        as a binary (e.g., `<<"did:iota:0xabc...">>'').
 %% @param CredentialType The credential type as a binary
@@ -66,16 +66,16 @@
 %% @param ClaimsJson A JSON object binary containing the credential
 %%        claims/properties. The `"id"' field will be automatically
 %%        set to the subject DID.
+%% @param PrivateKeyJwk The private key JWK as a JSON binary.
+%%        This is the key returned by `create_and_publish_did/4'
+%%        in the `private_key_jwk' field.
+%% @param Fragment The verification method fragment as a binary.
+%%        This is the fragment returned by `create_and_publish_did/4'
+%%        in the `verification_method_fragment' field.
 %%
 %% Example claims:
 %% ```
-%% Claims = <<"{
-%%   \"name\": \"Alice\",
-%%   \"degree\": {
-%%     \"type\": \"BachelorDegree\",
-%%     \"name\": \"Bachelor of Science and Arts\"
-%%   }
-%% }">>.
+%% Claims = <<"{\n%%   \"name\": \"Alice\",\n%%   \"degree\": {\n%%     \"type\": \"BachelorDegree\",\n%%     \"name\": \"Bachelor of Science and Arts\"\n%%   }\n%% }">>.
 %% '''
 %%
 %% @returns `{ok, JsonBinary}' on success. The JSON contains:
@@ -88,11 +88,12 @@
 %%          `{error, Reason}' on failure.
 -spec create_credential(
     IssuerDocJson :: binary(), SubjectDid :: binary(),
-    CredentialType :: binary(), ClaimsJson :: binary()
+    CredentialType :: binary(), ClaimsJson :: binary(),
+    PrivateKeyJwk :: binary(), Fragment :: binary()
 ) ->
     {ok, binary()} | {error, binary()}.
-create_credential(IssuerDocJson, SubjectDid, CredentialType, ClaimsJson) ->
-    iota_nif:create_credential(IssuerDocJson, SubjectDid, CredentialType, ClaimsJson).
+create_credential(IssuerDocJson, SubjectDid, CredentialType, ClaimsJson, PrivateKeyJwk, Fragment) ->
+    iota_nif:create_credential(IssuerDocJson, SubjectDid, CredentialType, ClaimsJson, PrivateKeyJwk, Fragment).
 
 %% @doc Verify a Verifiable Credential JWT.
 %%
@@ -126,13 +127,15 @@ verify_credential(CredentialJwt, IssuerDocJson) ->
 %% @doc Create a Verifiable Presentation (VP) as a signed JWT.
 %%
 %% The holder wraps one or more credential JWTs into a presentation
-%% and signs it. No challenge or expiry is set.
+%% and signs it using a caller-supplied private key. No expiry is set.
 %%
 %% @param HolderDocJson The holder's DID document as a JSON binary.
 %% @param CredentialJwtsJson A JSON array binary of credential JWT
 %%        strings (e.g., `<<"[\"eyJ...\", \"eyJ...\"]">>'').
 %% @param Challenge A nonce/challenge binary for replay protection.
 %%        Pass `<<>>' to omit.
+%% @param PrivateKeyJwk The private key JWK as a JSON binary.
+%% @param Fragment The verification method fragment as a binary.
 %%
 %% @returns `{ok, JsonBinary}' on success. The JSON contains:
 %%          <ul>
@@ -140,33 +143,37 @@ verify_credential(CredentialJwt, IssuerDocJson) ->
 %%            <li>`holder_did' - The holder's DID</li>
 %%          </ul>
 %%          `{error, Reason}' on failure.
-%% @see create_presentation/4
+%% @see create_presentation/6
 -spec create_presentation(
     HolderDocJson :: binary(), CredentialJwtsJson :: binary(),
-    Challenge :: binary()
+    Challenge :: binary(), PrivateKeyJwk :: binary(),
+    Fragment :: binary()
 ) ->
     {ok, binary()} | {error, binary()}.
-create_presentation(HolderDocJson, CredentialJwtsJson, Challenge) ->
-    create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, 0).
+create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, PrivateKeyJwk, Fragment) ->
+    create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, 0, PrivateKeyJwk, Fragment).
 
 %% @doc Create a Verifiable Presentation with expiration.
 %%
-%% Same as `create_presentation/3' but with an expiration time.
+%% Same as `create_presentation/5' but with an expiration time.
 %%
 %% @param HolderDocJson The holder's DID document as a JSON binary.
 %% @param CredentialJwtsJson A JSON array of credential JWT strings.
 %% @param Challenge A nonce/challenge binary. Pass `<<>>' to omit.
 %% @param ExpiresInSeconds Expiration time in seconds from now.
 %%        Pass `0' for no expiration.
+%% @param PrivateKeyJwk The private key JWK as a JSON binary.
+%% @param Fragment The verification method fragment as a binary.
 %%
 %% @returns `{ok, JsonBinary}' on success, `{error, Reason}' on failure.
 -spec create_presentation(
     HolderDocJson :: binary(), CredentialJwtsJson :: binary(),
-    Challenge :: binary(), ExpiresInSeconds :: non_neg_integer()
+    Challenge :: binary(), ExpiresInSeconds :: non_neg_integer(),
+    PrivateKeyJwk :: binary(), Fragment :: binary()
 ) ->
     {ok, binary()} | {error, binary()}.
-create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, ExpiresInSeconds) ->
-    iota_nif:create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, ExpiresInSeconds).
+create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, ExpiresInSeconds, PrivateKeyJwk, Fragment) ->
+    iota_nif:create_presentation(HolderDocJson, CredentialJwtsJson, Challenge, ExpiresInSeconds, PrivateKeyJwk, Fragment).
 
 %% @doc Verify a Verifiable Presentation JWT.
 %%

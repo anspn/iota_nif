@@ -7,10 +7,9 @@ use tokio::runtime::Runtime;
 use identity_iota::iota::rebased::client::{IdentityClient, IdentityClientReadOnly};
 use identity_iota::iota::{IotaDID, IotaDocument};
 use identity_iota::storage::{
-    JwkDocumentExt, JwkMemStore, JwkStorage, KeyIdMemstore, Storage, StorageSigner,
+    JwkMemStore, JwkStorage, KeyIdMemstore, Storage, StorageSigner,
 };
-use identity_iota::verification::jws::JwsAlgorithm;
-use identity_iota::verification::MethodScope;
+use identity_iota::verification::{MethodScope, VerificationMethod};
 use identity_iota::core::ToJson;
 
 // IOTA SDK imports (Rebased/MoveVM)
@@ -23,6 +22,7 @@ use identity_iota::verification::jose::jwk::{EdCurve, Jwk, JwkParamsOkp};
 // Ed25519 key derivation (derive public key from private key)
 use ed25519_dalek::SigningKey;
 use base64::Engine;
+use sha2::{Sha256, Digest};
 
 /// Default gas budget for DID transactions (in IOTA nanos)
 const DEFAULT_GAS_BUDGET: u64 = 50_000_000;
@@ -55,6 +55,10 @@ pub struct PublishResult {
     pub network: String,
     /// The sender address that published the DID
     pub sender_address: String,
+    /// The private key JWK (JSON) for the verification method.
+    /// The caller MUST store this securely — it is needed for
+    /// signing credentials and presentations.
+    pub private_key_jwk: String,
 }
 
 /// Result structure for DID resolution
@@ -448,18 +452,60 @@ async fn create_and_publish_did_async(
     // Create a new DID document for the connected network
     let mut document = IotaDocument::new(identity_client.network());
 
-    // Generate an Ed25519 verification method for the DID document
-    // (This is a separate key from the transaction signing key)
-    let fragment = document
-        .generate_method(
-            &storage,
-            JwkMemStore::ED25519_KEY_TYPE,
-            JwsAlgorithm::EdDSA,
-            None,
-            MethodScope::VerificationMethod,
-        )
-        .await
-        .map_err(|e| format!("Failed to generate verification method: {}", e))?;
+    // Generate an Ed25519 keypair for the DID verification method.
+    // Unlike the old approach (generate_method), we create the key
+    // manually so we can return the private key to the caller.
+    let vm_signing_key = {
+        use rand::RngCore;
+        let mut key_bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        SigningKey::from_bytes(&key_bytes)
+    };
+    let vm_verifying_key = vm_signing_key.verifying_key();
+
+    let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let mut vm_params = JwkParamsOkp::new();
+    vm_params.crv = EdCurve::Ed25519.name().to_string();
+    vm_params.x = b64url.encode(vm_verifying_key.as_bytes());
+    vm_params.d = Some(b64url.encode(vm_signing_key.to_bytes()));
+    let mut vm_full_jwk = Jwk::from_params(vm_params);
+    vm_full_jwk.set_alg("EdDSA");
+
+    // Compute JWK Thumbprint (RFC 7638) as kid
+    let vm_canonical = format!(
+        "{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{}\"}}",
+        b64url.encode(vm_verifying_key.as_bytes())
+    );
+    let vm_thumbprint = Sha256::digest(vm_canonical.as_bytes());
+    let vm_kid = b64url.encode(vm_thumbprint);
+    vm_full_jwk.set_kid(vm_kid);
+
+    let vm_public_jwk = vm_full_jwk
+        .to_public()
+        .ok_or_else(|| "Failed to derive public JWK from verification method key".to_string())?;
+
+    // Create a verification method from the public JWK.
+    // Fragment is auto-computed as the JWK thumbprint.
+    let method = VerificationMethod::new_from_jwk(
+        document.id().clone(),
+        vm_public_jwk,
+        None,
+    )
+    .map_err(|e| format!("Failed to create verification method: {}", e))?;
+
+    let fragment = method
+        .id()
+        .fragment()
+        .ok_or_else(|| "Verification method missing fragment".to_string())?
+        .to_string();
+
+    document
+        .insert_method(method, MethodScope::VerificationMethod)
+        .map_err(|e| format!("Failed to insert verification method: {}", e))?;
+
+    // Serialize the private JWK for return to the caller
+    let private_key_jwk_json = serde_json::to_string(&vm_full_jwk)
+        .map_err(|e| format!("Failed to serialize private key JWK: {}", e))?;
 
     // Publish the DID document to the IOTA Rebased ledger
     let published = identity_client
@@ -481,6 +527,7 @@ async fn create_and_publish_did_async(
         verification_method_fragment: fragment,
         network: identity_client.network().to_string(),
         sender_address: identity_client.address().to_string(),
+        private_key_jwk: private_key_jwk_json,
     })
 }
 

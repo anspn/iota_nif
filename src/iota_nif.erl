@@ -34,9 +34,9 @@
     update_notarization_state/5,
     destroy_notarization/4,
     %% Verifiable Credential / Presentation NIFs
-    create_credential/4,
+    create_credential/6,
     verify_credential/2,
-    create_presentation/4,
+    create_presentation/6,
     verify_presentation/4
 ]).
 
@@ -179,9 +179,10 @@ destroy_notarization(_NodeUrl, _SecretKey, _NotarizePkgId, _ObjectId) ->
 
 %% @private
 %% @doc Create a Verifiable Credential as a signed JWT.
--spec create_credential(binary(), binary(), binary(), binary()) ->
+%% Uses a caller-supplied private key and verification method fragment.
+-spec create_credential(binary(), binary(), binary(), binary(), binary(), binary()) ->
     {ok, binary()} | {error, binary()}.
-create_credential(_IssuerDocJson, _SubjectDid, _CredentialType, _ClaimsJson) ->
+create_credential(_IssuerDocJson, _SubjectDid, _CredentialType, _ClaimsJson, _PrivateKeyJwk, _Fragment) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @private
@@ -193,9 +194,10 @@ verify_credential(_CredentialJwt, _IssuerDocJson) ->
 
 %% @private
 %% @doc Create a Verifiable Presentation as a signed JWT.
--spec create_presentation(binary(), binary(), binary(), non_neg_integer()) ->
+%% Uses a caller-supplied private key and verification method fragment.
+-spec create_presentation(binary(), binary(), binary(), non_neg_integer(), binary(), binary()) ->
     {ok, binary()} | {error, binary()}.
-create_presentation(_HolderDocJson, _CredentialJwtsJson, _Challenge, _ExpiresInSeconds) ->
+create_presentation(_HolderDocJson, _CredentialJwtsJson, _Challenge, _ExpiresInSeconds, _PrivateKeyJwk, _Fragment) ->
     erlang:nif_error(nif_not_loaded).
 
 %% @private

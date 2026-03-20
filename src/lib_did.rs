@@ -2,23 +2,17 @@ use rustler::{Binary, NifResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use tokio::runtime::Runtime;
 
 // IOTA Identity imports
 use identity_iota::iota::IotaDocument;
-use identity_iota::storage::{JwkDocumentExt, JwkMemStore, KeyIdMemstore, Storage};
-use identity_iota::verification::jws::JwsAlgorithm;
-use identity_iota::verification::MethodScope;
+use identity_iota::verification::{MethodScope, VerificationMethod};
+use identity_iota::verification::jose::jwk::{EdCurve, Jwk, JwkParamsOkp};
 use identity_iota::core::ToJson;
 
-/// Global Tokio runtime for async operations
-/// Returns None if runtime creation fails (instead of panicking)
-fn runtime() -> Option<&'static Runtime> {
-    static RUNTIME: OnceLock<Option<Runtime>> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        Runtime::new().ok()
-    }).as_ref()
-}
+// Ed25519 key generation
+use ed25519_dalek::SigningKey;
+use base64::Engine;
+use sha2::{Sha256, Digest};
 
 /// Cache for interned network names to avoid memory leaks from Box::leak
 /// Limited to known valid network names only
@@ -41,6 +35,9 @@ pub struct DidResult {
     pub did: String,
     pub document: String,
     pub verification_method_fragment: String,
+    /// The private key JWK (JSON) for the verification method.
+    /// The caller should store this securely for signing operations.
+    pub private_key_jwk: String,
 }
 
 /// Error atoms for Erlang
@@ -66,15 +63,7 @@ pub fn generate_did(network_name: Binary) -> NifResult<(rustler::Atom, String)> 
         Err(_) => return Ok((atoms::error(), "Invalid network name: not valid UTF-8".to_string())),
     };
     
-    // Get the runtime safely (no panic)
-    let rt = match runtime() {
-        Some(rt) => rt,
-        None => return Ok((atoms::error(), "Failed to initialize async runtime".to_string())),
-    };
-    
-    let result = rt.block_on(async {
-        generate_did_async(network_name_str).await
-    });
+    let result = generate_did_sync(network_name_str);
 
     match result {
         Ok(did_result) => {
@@ -86,8 +75,8 @@ pub fn generate_did(network_name: Binary) -> NifResult<(rustler::Atom, String)> 
     }
 }
 
-/// Async DID generation implementation
-async fn generate_did_async(network_name: &str) -> Result<DidResult, String> {
+/// DID generation implementation (synchronous — no storage/network needed)
+fn generate_did_sync(network_name: &str) -> Result<DidResult, String> {
     use product_common::network_name::NetworkName;
     
     // Use cached static network names to avoid memory leaks
@@ -105,21 +94,55 @@ async fn generate_did_async(network_name: &str) -> Result<DidResult, String> {
     // Create a new DID document for the specified network
     let mut document = IotaDocument::new(&network);
     
-    // Create in-memory storage for keys
-    let storage: Storage<JwkMemStore, KeyIdMemstore> = 
-        Storage::new(JwkMemStore::new(), KeyIdMemstore::new());
-    
-    // Generate a new verification method with Ed25519
-    let fragment = document
-        .generate_method(
-            &storage,
-            JwkMemStore::ED25519_KEY_TYPE,
-            JwsAlgorithm::EdDSA,
-            None,
-            MethodScope::VerificationMethod,
-        )
-        .await
-        .map_err(|e| format!("Failed to generate method: {}", e))?;
+    // Generate an Ed25519 keypair for the verification method
+    let signing_key = {
+        use rand::RngCore;
+        let mut key_bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+        SigningKey::from_bytes(&key_bytes)
+    };
+    let verifying_key = signing_key.verifying_key();
+
+    let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let mut params = JwkParamsOkp::new();
+    params.crv = EdCurve::Ed25519.name().to_string();
+    params.x = b64url.encode(verifying_key.as_bytes());
+    params.d = Some(b64url.encode(signing_key.to_bytes()));
+    let mut full_jwk = Jwk::from_params(params);
+    full_jwk.set_alg("EdDSA");
+
+    // Compute JWK Thumbprint (RFC 7638) as kid
+    let canonical = format!(
+        "{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{}\"}}",
+        b64url.encode(verifying_key.as_bytes())
+    );
+    let thumbprint = Sha256::digest(canonical.as_bytes());
+    let kid = b64url.encode(thumbprint);
+    full_jwk.set_kid(kid);
+
+    let public_jwk = full_jwk
+        .to_public()
+        .ok_or_else(|| "Failed to derive public JWK".to_string())?;
+
+    let method = VerificationMethod::new_from_jwk(
+        document.id().clone(),
+        public_jwk,
+        None,
+    )
+    .map_err(|e| format!("Failed to create verification method: {}", e))?;
+
+    let fragment = method
+        .id()
+        .fragment()
+        .ok_or_else(|| "Verification method missing fragment".to_string())?
+        .to_string();
+
+    document
+        .insert_method(method, MethodScope::VerificationMethod)
+        .map_err(|e| format!("Failed to insert verification method: {}", e))?;
+
+    let private_key_jwk_json = serde_json::to_string(&full_jwk)
+        .map_err(|e| format!("Failed to serialize private key JWK: {}", e))?;
     
     // Get the DID string
     let did = document.id().to_string();
@@ -133,6 +156,7 @@ async fn generate_did_async(network_name: &str) -> Result<DidResult, String> {
         did,
         document: document_json,
         verification_method_fragment: fragment,
+        private_key_jwk: private_key_jwk_json,
     })
 }
 

@@ -16,9 +16,8 @@ use identity_iota::credential::{
 use identity_iota::document::verifiable::JwsVerificationOptions;
 use identity_iota::iota::IotaDocument;
 use identity_iota::did::DID;
-use identity_iota::storage::{JwkDocumentExt, JwkMemStore, JwsSignatureOptions, KeyIdMemstore, Storage};
-use identity_iota::verification::jws::JwsAlgorithm;
-use identity_iota::verification::MethodScope;
+use identity_iota::storage::{JwkDocumentExt, JwkMemStore, JwkStorage, JwsSignatureOptions, KeyIdMemstore, KeyIdStorage, MethodDigest, Storage};
+use identity_iota::verification::jose::jwk::Jwk;
 
 // EdDSA verifier for JWT validation
 use identity_eddsa_verifier::EdDSAJwsVerifier;
@@ -94,13 +93,16 @@ pub struct VerifyPresentationResult {
 /// Create a Verifiable Credential (VC) as a signed JWT.
 ///
 /// The issuer creates a credential about a subject (holder) and signs it
-/// with the issuer's DID document verification method.
+/// using a caller-supplied private key that corresponds to an existing
+/// verification method in the issuer's DID document.
 ///
 /// Parameters:
 /// - issuer_doc_json: The issuer's DID document as JSON
 /// - subject_did: The subject/holder's DID string
 /// - credential_type: The credential type (e.g., "UniversityDegreeCredential")
 /// - claims_json: JSON object with the credential claims/properties
+/// - private_key_jwk: The private key JWK (JSON) for signing
+/// - fragment: The verification method fragment in the issuer document
 ///
 /// Returns: {:ok, json_string} | {:error, reason}
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -109,6 +111,8 @@ pub fn create_credential(
     subject_did: Binary,
     credential_type: Binary,
     claims_json: Binary,
+    private_key_jwk: Binary,
+    fragment: Binary,
 ) -> NifResult<(rustler::Atom, String)> {
     let issuer_doc_str = match std::str::from_utf8(issuer_doc_json.as_slice()) {
         Ok(s) => s,
@@ -146,6 +150,24 @@ pub fn create_credential(
             ))
         }
     };
+    let private_key_str = match std::str::from_utf8(private_key_jwk.as_slice()) {
+        Ok(s) => s,
+        Err(_) => {
+            return Ok((
+                atoms::error(),
+                "Invalid private key JWK: not valid UTF-8".to_string(),
+            ))
+        }
+    };
+    let fragment_str = match std::str::from_utf8(fragment.as_slice()) {
+        Ok(s) => s,
+        Err(_) => {
+            return Ok((
+                atoms::error(),
+                "Invalid fragment: not valid UTF-8".to_string(),
+            ))
+        }
+    };
 
     let rt = match runtime() {
         Some(rt) => rt,
@@ -158,7 +180,10 @@ pub fn create_credential(
     };
 
     let result = rt.block_on(async {
-        create_credential_async(issuer_doc_str, subject_did_str, cred_type_str, claims_str).await
+        create_credential_async(
+            issuer_doc_str, subject_did_str, cred_type_str, claims_str,
+            private_key_str, fragment_str,
+        ).await
     });
 
     match result {
@@ -220,7 +245,8 @@ pub fn verify_credential(
 /// Create a Verifiable Presentation (VP) as a signed JWT.
 ///
 /// The holder wraps one or more credential JWTs into a presentation and
-/// signs it with their DID document verification method. A challenge
+/// signs it using a caller-supplied private key that corresponds to an
+/// existing verification method in the holder's DID document. A challenge
 /// (nonce) can be included to prevent replay attacks.
 ///
 /// Parameters:
@@ -228,6 +254,8 @@ pub fn verify_credential(
 /// - credential_jwts_json: JSON array of credential JWT strings
 /// - challenge: A nonce/challenge string (can be empty)
 /// - expires_in_seconds: Expiration time in seconds from now (0 = no expiry)
+/// - private_key_jwk: The private key JWK (JSON) for signing
+/// - fragment: The verification method fragment in the holder document
 ///
 /// Returns: {:ok, json_string} | {:error, reason}
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -236,6 +264,8 @@ pub fn create_presentation(
     credential_jwts_json: Binary,
     challenge: Binary,
     expires_in_seconds: u64,
+    private_key_jwk: Binary,
+    fragment: Binary,
 ) -> NifResult<(rustler::Atom, String)> {
     let holder_doc_str = match std::str::from_utf8(holder_doc_json.as_slice()) {
         Ok(s) => s,
@@ -264,6 +294,24 @@ pub fn create_presentation(
             ))
         }
     };
+    let private_key_str = match std::str::from_utf8(private_key_jwk.as_slice()) {
+        Ok(s) => s,
+        Err(_) => {
+            return Ok((
+                atoms::error(),
+                "Invalid private key JWK: not valid UTF-8".to_string(),
+            ))
+        }
+    };
+    let fragment_str = match std::str::from_utf8(fragment.as_slice()) {
+        Ok(s) => s,
+        Err(_) => {
+            return Ok((
+                atoms::error(),
+                "Invalid fragment: not valid UTF-8".to_string(),
+            ))
+        }
+    };
 
     let rt = match runtime() {
         Some(rt) => rt,
@@ -276,8 +324,10 @@ pub fn create_presentation(
     };
 
     let result = rt.block_on(async {
-        create_presentation_async(holder_doc_str, creds_str, challenge_str, expires_in_seconds)
-            .await
+        create_presentation_async(
+            holder_doc_str, creds_str, challenge_str, expires_in_seconds,
+            private_key_str, fragment_str,
+        ).await
     });
 
     match result {
@@ -364,23 +414,59 @@ pub fn verify_presentation(
 // Async/Sync Implementations
 // ================================================================
 
-/// Create a credential JWT using the issuer's DID document.
+/// Create a credential JWT using the issuer's DID document and
+/// a caller-supplied private key.
 ///
-/// This function creates a fresh DID document with a new verification method,
-/// builds the credential, signs it as a JWT, and returns the result.
-/// The issuer document JSON is used to extract the issuer DID, but a new
-/// in-memory storage is created for signing since we need the private key.
+/// The private key must correspond to an existing verification method
+/// (identified by `fragment`) in the issuer's DID document. This ensures
+/// the resulting JWT can be verified against the published document.
 async fn create_credential_async(
     issuer_doc_json: &str,
     subject_did: &str,
     credential_type: &str,
     claims_json: &str,
+    private_key_jwk_json: &str,
+    fragment: &str,
 ) -> Result<CreateCredentialResult, String> {
     // Parse the issuer DID document
-    let mut issuer_document = IotaDocument::from_json(issuer_doc_json)
+    let issuer_document = IotaDocument::from_json(issuer_doc_json)
         .map_err(|e| format!("Failed to parse issuer document: {}", e))?;
 
     let issuer_did = issuer_document.id().to_string();
+
+    // Verify the fragment exists in the document
+    let method = issuer_document
+        .resolve_method(fragment, None)
+        .ok_or_else(|| {
+            format!(
+                "Verification method '{}' not found in issuer document",
+                fragment
+            )
+        })?;
+
+    // Parse the caller-supplied private key JWK
+    let private_jwk: Jwk = serde_json::from_str(private_key_jwk_json)
+        .map_err(|e| format!("Failed to parse private key JWK: {}", e))?;
+
+    // Create in-memory storage and import the caller's key
+    let storage: Storage<JwkMemStore, KeyIdMemstore> =
+        Storage::new(JwkMemStore::new(), KeyIdMemstore::new());
+
+    let key_id = storage
+        .key_storage()
+        .insert(private_jwk)
+        .await
+        .map_err(|e| format!("Failed to import private key: {:?}", e))?;
+
+    // Map the verification method to the imported key
+    let method_digest = MethodDigest::new(method)
+        .map_err(|e| format!("Failed to compute method digest: {}", e))?;
+
+    storage
+        .key_id_storage()
+        .insert_key_id(method_digest, key_id)
+        .await
+        .map_err(|e| format!("Failed to map key to method: {:?}", e))?;
 
     // Parse the claims JSON
     let mut claims: serde_json::Value = serde_json::from_str(claims_json)
@@ -392,22 +478,6 @@ async fn create_credential_async(
     } else {
         return Err("Claims must be a JSON object".to_string());
     }
-
-    // Create in-memory storage for signing
-    let storage: Storage<JwkMemStore, KeyIdMemstore> =
-        Storage::new(JwkMemStore::new(), KeyIdMemstore::new());
-
-    // Generate a verification method for signing
-    let fragment = issuer_document
-        .generate_method(
-            &storage,
-            JwkMemStore::ED25519_KEY_TYPE,
-            JwsAlgorithm::EdDSA,
-            None,
-            MethodScope::VerificationMethod,
-        )
-        .await
-        .map_err(|e| format!("Failed to generate verification method: {}", e))?;
 
     // Build the credential subject
     let subject = Subject::from_json_value(claims)
@@ -424,12 +494,12 @@ async fn create_credential_async(
         .build()
         .map_err(|e| format!("Failed to build credential: {}", e))?;
 
-    // Sign the credential as a JWT
+    // Sign the credential as a JWT using the caller's key
     let credential_jwt: Jwt = issuer_document
         .create_credential_jwt(
             &credential,
             &storage,
-            &fragment,
+            fragment,
             &JwsSignatureOptions::default(),
             None,
         )
@@ -491,18 +561,58 @@ fn verify_credential_sync(
     })
 }
 
-/// Create a presentation JWT using the holder's DID document.
+/// Create a presentation JWT using the holder's DID document and
+/// a caller-supplied private key.
+///
+/// The private key must correspond to an existing verification method
+/// (identified by `fragment`) in the holder's DID document.
 async fn create_presentation_async(
     holder_doc_json: &str,
     credential_jwts_json: &str,
     challenge: &str,
     expires_in_seconds: u64,
+    private_key_jwk_json: &str,
+    fragment: &str,
 ) -> Result<CreatePresentationResult, String> {
     // Parse the holder DID document
-    let mut holder_document = IotaDocument::from_json(holder_doc_json)
+    let holder_document = IotaDocument::from_json(holder_doc_json)
         .map_err(|e| format!("Failed to parse holder document: {}", e))?;
 
     let holder_did = holder_document.id().to_string();
+
+    // Verify the fragment exists in the document
+    let method = holder_document
+        .resolve_method(fragment, None)
+        .ok_or_else(|| {
+            format!(
+                "Verification method '{}' not found in holder document",
+                fragment
+            )
+        })?;
+
+    // Parse the caller-supplied private key JWK
+    let private_jwk: Jwk = serde_json::from_str(private_key_jwk_json)
+        .map_err(|e| format!("Failed to parse private key JWK: {}", e))?;
+
+    // Create in-memory storage and import the caller's key
+    let storage: Storage<JwkMemStore, KeyIdMemstore> =
+        Storage::new(JwkMemStore::new(), KeyIdMemstore::new());
+
+    let key_id = storage
+        .key_storage()
+        .insert(private_jwk)
+        .await
+        .map_err(|e| format!("Failed to import private key: {:?}", e))?;
+
+    // Map the verification method to the imported key
+    let method_digest = MethodDigest::new(method)
+        .map_err(|e| format!("Failed to compute method digest: {}", e))?;
+
+    storage
+        .key_id_storage()
+        .insert_key_id(method_digest, key_id)
+        .await
+        .map_err(|e| format!("Failed to map key to method: {:?}", e))?;
 
     // Parse the credential JWTs array
     let credential_jwt_strings: Vec<String> = serde_json::from_str(credential_jwts_json)
@@ -511,22 +621,6 @@ async fn create_presentation_async(
     if credential_jwt_strings.is_empty() {
         return Err("At least one credential JWT is required".to_string());
     }
-
-    // Create in-memory storage for signing
-    let storage: Storage<JwkMemStore, KeyIdMemstore> =
-        Storage::new(JwkMemStore::new(), KeyIdMemstore::new());
-
-    // Generate a verification method for signing
-    let fragment = holder_document
-        .generate_method(
-            &storage,
-            JwkMemStore::ED25519_KEY_TYPE,
-            JwsAlgorithm::EdDSA,
-            None,
-            MethodScope::VerificationMethod,
-        )
-        .await
-        .map_err(|e| format!("Failed to generate verification method: {}", e))?;
 
     // Build the presentation with the credential JWTs
     let holder_url = holder_document.id().to_url().into();
@@ -554,12 +648,12 @@ async fn create_presentation_async(
         pres_options = pres_options.expiration_date(expires);
     }
 
-    // Sign the presentation as a JWT
+    // Sign the presentation as a JWT using the caller's key
     let presentation_jwt: Jwt = holder_document
         .create_presentation_jwt(
             &presentation,
             &storage,
-            &fragment,
+            fragment,
             &jws_options,
             &pres_options,
         )
