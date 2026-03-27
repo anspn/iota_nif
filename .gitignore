@@ -6,3 +6,6 @@
 *.beam
 erl_crash.dump
 .env
+
+# Precompiled packaging artifacts
+/artifacts/

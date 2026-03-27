@@ -83,9 +83,46 @@ IdentityPkgId = <<"0xabc123...">>,         %% identity package ObjectID
 {ok, ResultJson} = iota_did_nif:create_and_publish_did(SecretKey, NodeUrl, IdentityPkgId).
 ```
 
-## Installation as rebar3 Dependency
+## Installation
 
-Add to your `rebar.config`:
+### Option A: Precompiled (recommended)
+
+Use the precompiled version to skip the ~7-8 minute Rust build. The precompiled
+NIF binary (Linux x86_64) is available on the `precompiled` branch.
+
+**rebar3** — add to your `rebar.config`:
+
+```erlang
+{deps, [
+    {iota_nif, {git, "https://github.com/anspn/iota_nif.git", {tag, "v0.3.1-precompiled"}}}
+]}.
+```
+
+**Mix (Elixir)** — add to your `mix.exs`:
+
+```elixir
+defp deps do
+  [
+    {:iota_nif, git: "https://github.com/anspn/iota_nif.git", tag: "v0.3.1-precompiled"}
+  ]
+end
+```
+
+Then compile — Erlang sources compile in seconds, no Rust toolchain needed:
+
+```bash
+rebar3 compile   # or: mix deps.get && mix compile
+```
+
+> **Note:** The precompiled NIF is built for Linux x86_64 with OTP 27.
+> If you need a different platform or OTP version, use Option B.
+
+A tar.gz archive is also available on the
+[GitHub Releases](https://github.com/anspn/iota_nif/releases) page for manual download.
+
+### Option B: Build from source
+
+Requires Rust 1.70+ and Erlang/OTP 27+. Add to your `rebar.config`:
 
 ```erlang
 {deps, [
@@ -99,7 +136,7 @@ Then run:
 rebar3 compile
 ```
 
-The Rust NIF will be automatically compiled during the build process.
+The Rust NIF will be automatically compiled during the build process (~7-8 minutes on first build).
 
 ## Usage
 

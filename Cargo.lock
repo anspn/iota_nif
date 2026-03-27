@@ -4839,7 +4839,7 @@ dependencies = [
 
 [[package]]
 name = "iota_nif"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "bech32 0.11.1",
