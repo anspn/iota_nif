@@ -1,0 +1,26 @@
+{application, iota_nif,
+ [{description, "IOTA NIF library for Erlang/OTP"},
+  {vsn, "0.3.1"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env, []},
+  {modules, []},  %% Modules auto-discovered by rebar3
+
+  %% Hex.pm metadata
+  {licenses, ["MIT"]},
+  {links, [
+    {"GitHub", "https://github.com/anspn/iota_nif"}
+  ]},
+  {files, [
+    "src",
+    "priv",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rebar.config",
+    "README.md",
+    "LICENSE"
+  ]}
+ ]}.
